@@ -1,7 +1,7 @@
 import pg from "pg";
 
 // Loopback-only, trust-auth role scoped to ragdb — see
-// ~/Developer/github.com/ismailkattakath/nix-local-rag/modules/pgvector-local.nix.
+// ~/Developer/github.com/kattakath/nix-local-rag/modules/pgvector-local.nix.
 // Not a secret: no password exists for this role, and it only accepts
 // connections from 127.0.0.1.
 const DATABASE_URI =

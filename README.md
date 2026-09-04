@@ -1,6 +1,6 @@
 # ircc-whatsapp-bot
 
-[![CI](https://github.com/ismailkattakath/ircc-whatsapp-bot/actions/workflows/ci.yml/badge.svg)](https://github.com/ismailkattakath/ircc-whatsapp-bot/actions/workflows/ci.yml)
+[![CI](https://github.com/kattakath/ircc-whatsapp-bot/actions/workflows/ci.yml/badge.svg)](https://github.com/kattakath/ircc-whatsapp-bot/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 [![Built with Nix](https://img.shields.io/badge/built%20with-Nix-5277C3.svg?logo=nixos&logoColor=white)](https://nixos.org)
 [![LangGraph.js](https://img.shields.io/badge/dialogue-LangGraph.js-1C3C3C.svg)](https://docs.langchain.com/oss/javascript/langgraph)
@@ -191,7 +191,7 @@ Supported systems: `x86_64-linux`, `aarch64-linux`, `aarch64-darwin`
 
 ```nix
 {
-  inputs.ircc-whatsapp-bot.url = "github:ismailkattakath/ircc-whatsapp-bot";
+  inputs.ircc-whatsapp-bot.url = "github:kattakath/ircc-whatsapp-bot";
   inputs.ircc-whatsapp-bot.inputs.nixpkgs.follows = "nixpkgs";
   # ... in your home-manager modules:
   #   ircc-whatsapp-bot.homeManagerModules.default
@@ -225,7 +225,7 @@ conflicting instances. Instead, following the same
 - **Already have a compatible Postgres?** Leave `localRag.enable` at its
   default (`false`) and point `ragdbUri` at it.
 - **Starting from nothing?** Set `localRag.enable = true` — this module
-  always imports [nix-local-rag](https://github.com/ismailkattakath/nix-local-rag)
+  always imports [nix-local-rag](https://github.com/kattakath/nix-local-rag)
   (a separate, independently reusable flake: pgvector + Ollama, launchd/
   home-manager, no API key, nothing leaves the machine) and, when enabled,
   turns on its `services.pgvectorLocal`/`services.ollamaLocal` for you.

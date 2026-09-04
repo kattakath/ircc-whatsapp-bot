@@ -6,13 +6,13 @@
   "description": "WhatsApp bot that answers Canadian immigration questions grounded in official IRCC pages, via a local pgvector RAG store.",
   "license": "MIT",
   "author": "Ismail Kattakath",
-  "homepage": "https://github.com/ismailkattakath/ircc-whatsapp-bot#readme",
+  "homepage": "https://github.com/kattakath/ircc-whatsapp-bot#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/ismailkattakath/ircc-whatsapp-bot.git"
+    "url": "git+https://github.com/kattakath/ircc-whatsapp-bot.git"
   },
   "bugs": {
-    "url": "https://github.com/ismailkattakath/ircc-whatsapp-bot/issues"
+    "url": "https://github.com/kattakath/ircc-whatsapp-bot/issues"
   },
   "keywords": [
     "whatsapp-bot",

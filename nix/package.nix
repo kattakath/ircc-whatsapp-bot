@@ -38,7 +38,7 @@ buildNpmPackage {
 
   meta = {
     description = "WhatsApp bot answering Canadian immigration questions, grounded in official IRCC content via a local pgvector RAG store";
-    homepage = "https://github.com/ismailkattakath/ircc-whatsapp-bot";
+    homepage = "https://github.com/kattakath/ircc-whatsapp-bot";
     mainProgram = "ircc-whatsapp-bot";
   };
 }

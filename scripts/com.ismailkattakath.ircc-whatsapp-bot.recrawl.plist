@@ -8,11 +8,11 @@
 	<key>ProgramArguments</key>
 	<array>
 		<string>/opt/homebrew/bin/node</string>
-		<string>/Users/ismail/Developer/github.com/ismailkattakath/ircc-whatsapp-bot/scripts/recrawl.js</string>
+		<string>/Users/ismail/Developer/github.com/kattakath/ircc-whatsapp-bot/scripts/recrawl.js</string>
 	</array>
 
 	<key>WorkingDirectory</key>
-	<string>/Users/ismail/Developer/github.com/ismailkattakath/ircc-whatsapp-bot</string>
+	<string>/Users/ismail/Developer/github.com/kattakath/ircc-whatsapp-bot</string>
 
 	<!-- Runs on the 1st of each month at 3:00 AM local time, when the bot
 	     is least likely to be in use and the crawl won't compete with a

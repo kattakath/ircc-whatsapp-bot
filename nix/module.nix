@@ -107,7 +107,7 @@ in
     localRag = {
       enable = lib.mkEnableOption ''
         provisioning a local RAG Postgres (pgvector + Ollama embed()) via
-        nix-local-rag (github:ismailkattakath/nix-local-rag), instead of
+        nix-local-rag (github:kattakath/nix-local-rag), instead of
         bringing your own via `ragdbUri`. Same "createLocally" idiom as
         nixpkgs' own services.<app>.database.createLocally options -- off
         by default so a host that already provisions pgvectorLocal itself
