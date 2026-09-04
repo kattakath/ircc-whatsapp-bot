@@ -10,7 +10,7 @@
     # fetched (a flake input can't be conditional), but its module does
     # nothing unless that option turns it on, same "always import, gate by
     # .enable" idiom nixpkgs itself uses for `services.postgresql`.
-    nix-local-rag.url = "github:ismailkattakath/nix-local-rag";
+    nix-local-rag.url = "github:kattakath/nix-local-rag";
     nix-local-rag.inputs.nixpkgs.follows = "nixpkgs";
   };
 
@@ -34,7 +34,7 @@
 
       flake = {
         # `services.irccWhatsappBot` — see nix/module.nix. Consumers:
-        #   inputs.ircc-whatsapp-bot.url = "github:ismailkattakath/ircc-whatsapp-bot";
+        #   inputs.ircc-whatsapp-bot.url = "github:kattakath/ircc-whatsapp-bot";
         #   inputs.ircc-whatsapp-bot.inputs.nixpkgs.follows = "nixpkgs";
         #   extraHomeModules = [
         #     ircc-whatsapp-bot.homeManagerModules.default

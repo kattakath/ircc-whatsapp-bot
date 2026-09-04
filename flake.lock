@@ -18,6 +18,24 @@
         "type": "github"
       }
     },
+    "flake-parts_2": {
+      "inputs": {
+        "nixpkgs-lib": "nixpkgs-lib_2"
+      },
+      "locked": {
+        "lastModified": 1785627969,
+        "narHash": "sha256-4dtXQk/NMePegK/nWp5NSeuZKLATItOq61lpEvmXqGw=",
+        "owner": "hercules-ci",
+        "repo": "flake-parts",
+        "rev": "427bf4bd9435fdf21321c8cc628c24efc14c0f7a",
+        "type": "github"
+      },
+      "original": {
+        "owner": "hercules-ci",
+        "repo": "flake-parts",
+        "type": "github"
+      }
+    },
     "home-manager": {
       "inputs": {
         "nixpkgs": [
@@ -41,21 +59,22 @@
     },
     "nix-local-rag": {
       "inputs": {
+        "flake-parts": "flake-parts_2",
         "home-manager": "home-manager",
         "nixpkgs": [
           "nixpkgs"
         ]
       },
       "locked": {
-        "lastModified": 1786432734,
-        "narHash": "sha256-8Wli+dvUIIM29BqVfpTFq6Z/+yVSuUoNh0ChzQBNBmw=",
-        "owner": "ismailkattakath",
+        "lastModified": 1787877557,
+        "narHash": "sha256-rtCMS4qnAprDLSLoXeF2BQyR6xW4ETXQunKHqvZbuy4=",
+        "owner": "kattakath",
         "repo": "nix-local-rag",
-        "rev": "82692a741731ffd8e15b9b02e67c5ad43a4d5700",
+        "rev": "ff74863574390aa10372d4b81fb33992058950c1",
         "type": "github"
       },
       "original": {
-        "owner": "ismailkattakath",
+        "owner": "kattakath",
         "repo": "nix-local-rag",
         "type": "github"
       }
@@ -77,6 +96,21 @@
       }
     },
     "nixpkgs-lib": {
+      "locked": {
+        "lastModified": 1785031560,
+        "narHash": "sha256-OmshNvn2vupOFpYinLUu+1Dnpu4n7Q5N3ggGVNHpkUI=",
+        "owner": "nix-community",
+        "repo": "nixpkgs.lib",
+        "rev": "0e79af5e3d4dcfcd676ab5ba3f95d2e3352e078c",
+        "type": "github"
+      },
+      "original": {
+        "owner": "nix-community",
+        "repo": "nixpkgs.lib",
+        "type": "github"
+      }
+    },
+    "nixpkgs-lib_2": {
       "locked": {
         "lastModified": 1785031560,
         "narHash": "sha256-OmshNvn2vupOFpYinLUu+1Dnpu4n7Q5N3ggGVNHpkUI=",
