@@ -157,10 +157,6 @@ in
     services.pgvectorLocal.enable = lib.mkIf cfg.localRag.enable (lib.mkDefault true);
     services.ollamaLocal.enable = lib.mkIf cfg.localRag.enable (lib.mkDefault true);
 
-    home.activation.irccWhatsappBotStateDir = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
-      /bin/mkdir -p ${lib.escapeShellArg cfg.stateDir}
-    '';
-
     launchd.agents.ircc-whatsapp-bot = lib.mkIf pkgs.stdenv.hostPlatform.isDarwin {
       enable = true;
       config = {
