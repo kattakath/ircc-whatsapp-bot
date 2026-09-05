@@ -13,7 +13,12 @@ import { closeDb } from "./db.js";
 
 const threadId = "sim-thread-" + Date.now();
 const config = { configurable: { thread_id: threadId } };
-const checkpointer = PostgresSaver.fromConnString("postgresql://mcp@127.0.0.1:5433/ragdb");
+// Same RAGDB_URI-with-fallback shape as db.js and index.js — this was the one
+// entry point that hardcoded the URI, so simulating against a non-default
+// database silently checkpointed to the default one instead.
+const checkpointer = PostgresSaver.fromConnString(
+  process.env.RAGDB_URI ?? "postgresql://mcp@127.0.0.1:5433/ragdb",
+);
 await checkpointer.setup();
 
 let graph = builder.compile({ checkpointer });
