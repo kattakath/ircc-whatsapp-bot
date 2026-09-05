@@ -53,7 +53,7 @@ function parseYesNo(text) {
   return null;
 }
 
-// --- branch definitions (unchanged from the old dialogue.js) --------------
+// --- branch definitions ---------------------------------------------------
 
 const TOPIC_BRANCHES = {
   1: { label: "visiting Canada", sources: ["ircc-crawl-visit"] },
@@ -197,7 +197,7 @@ function looksLikeRealQuestion(text) {
 // is treated as "incorrect" and discarded in favor of a canada.ca-scoped
 // live search, same as CRAG's incorrect branch. This trades grading
 // precision for zero extra latency (an LLM grading call would stack with
-// the already-slow gpt-5.5-pro synthesis call).
+// the already-slow synthesis call).
 const GRADE_THRESHOLD = 0.5;
 
 async function answerFreeform(question, sources = null) {

@@ -1,7 +1,7 @@
 import pg from "pg";
 
 // Loopback-only, trust-auth role scoped to ragdb — see
-// ~/Developer/github.com/kattakath/nix-local-rag/modules/pgvector-local.nix.
+// https://github.com/kattakath/nix-local-rag (modules/pgvector-local.nix).
 // Not a secret: no password exists for this role, and it only accepts
 // connections from 127.0.0.1.
 const DATABASE_URI =
@@ -13,7 +13,7 @@ const SIMILARITY_FLOOR = 0.3;
 
 /**
  * Retrieve the top-k IRCC chunks for a question, optionally scoped to one
- * or more `source` values (e.g. ["ircc-pr", "ircc-citizenship"]).
+ * or more `source` values (e.g. ["ircc-crawl-pr", "ircc-crawl-citizenship"]).
  * Returns [] if nothing clears SIMILARITY_FLOOR.
  */
 export async function retrieve(question, { sources = null, limit = 8 } = {}) {

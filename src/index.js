@@ -150,11 +150,11 @@ async function start() {
 
       await sock.sendPresenceUpdate("composing", jid);
 
-      // gpt-5.5-pro can take 30-60s. This is deliberately NOT inside a graph
-      // node (a node re-executes from its top on resume-after-crash, so any
-      // side effect before its interrupt() would double-fire) — instead
-      // plain timers here handle it, decoupled from which internal node
-      // happens to be slow.
+      // A deep-reasoning synthesis model can take 30-60s. This is
+      // deliberately NOT inside a graph node (a node re-executes from its
+      // top on resume-after-crash, so any side effect before its interrupt()
+      // would double-fire) — instead plain timers here handle it, decoupled
+      // from which internal node happens to be slow.
 
       // WhatsApp's "composing" indicator isn't persistent — it has a short
       // TTL (~10-25s) and silently disappears if not refreshed. A single
@@ -223,9 +223,9 @@ async function start() {
   }
 
   // Serialize processing per sender: without this, a burst of messages sent
-  // while a slow gpt-5.5-pro reply is still in flight fire concurrently and
-  // get answered out of order, which reads as broken to a non-technical
-  // user. Different senders still run fully in parallel.
+  // while a slow reply is still in flight fire concurrently and get
+  // answered out of order, which reads as broken to a non-technical user.
+  // Different senders still run fully in parallel.
   const jidQueues = new Map();
   function enqueue(jid, task) {
     const prev = jidQueues.get(jid) ?? Promise.resolve();

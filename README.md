@@ -117,7 +117,7 @@ npm install
 ```
 
 Environment variables:
-- `OPENAI_API_KEY` — required (already set in this shell's env).
+- `OPENAI_API_KEY` — required.
 - `OPENAI_MODEL` — optional, defaults to `gpt-5.5` (a few seconds per
   reply). Set to `gpt-5.5-pro` for deeper reasoning at the cost of 30-90s
   per reply — no code change needed either way, `client.responses.create`
@@ -127,10 +127,20 @@ Environment variables:
   free tier at [serper.dev](https://serper.dev). Without it, weak local
   retrieval just falls through to the existing "I don't have that info"
   answer instead of searching canada.ca live.
+- `PAIR_PHONE_NUMBER` — optional: digits only, no `+`. Set it to pair via a
+  phone-number code instead of scanning a QR (see "Pairing WhatsApp" below).
 - `ALLOWED_NUMBERS` — optional but recommended once this is live: a
   comma-separated allowlist of phone numbers (digits only, e.g.
   `15145551234`) permitted to talk to the bot. Unset = replies to anyone
   who messages the linked number.
+- `LANGCHAIN_TRACING_V2` / `LANGCHAIN_API_KEY` / `LANGCHAIN_PROJECT` —
+  optional LangSmith tracing; tracing is off unless `LANGCHAIN_TRACING_V2`
+  is `true`.
+- `APIFY_TOKEN` — only for re-crawl/ingest (`scripts/recrawl.js`); not
+  needed to run the bot.
+- `INNGEST_SERVE_PORT` — only for `scripts/inngest/serve.js`.
+
+`.env.example` is the authoritative list — copy it to `.env` and fill in.
 
 ## Pairing WhatsApp — use a SPARE number, not your friend's main one
 
@@ -213,9 +223,9 @@ Darwin, `systemd --user` on Linux (Linux path is real but untested — no
 Linux host runs this today).
 
 **The RAG database dependency**: this bot needs a reachable Postgres with
-pgvector and an `embed(text)` SQL function (see "What's in the RAG store" —
-actually the section below on setup). That's genuinely third-party
-infrastructure, not something bundled into this flake — bundling it in would
+pgvector and an `embed(text)` SQL function (see "What's in the RAG store
+right now" below). That's genuinely third-party infrastructure, not
+something bundled into this flake — bundling it in would
 mean any host running something *else* that also needs Postgres/Ollama (a
 real case: this repo's own author also runs a separate voice-assistant tool
 against the same local Ollama) ends up with two redundant, possibly
@@ -256,7 +266,7 @@ Each chunk is tagged with a per-topic `source` derived from its URL path
 `ircc-crawl-passports`, `ircc-crawl-other` for everything else under
 `/services/` — mostly application forms/guides) — `graph.js`'s
 `TOPIC_BRANCHES`/`BRANCH_SOURCES` filter retrieval by these exact tags, so
-if you re-crawl, keep the tag scheme in sync with `scripts/ingest-crawl.js`'s
+if you re-crawl, keep the tag scheme in sync with `scripts/chunking.js`'s
 `TOPIC_MAP`, or the menu branches will silently return no results.
 
 **Staleness risk**: this content changes — the initial crawl already picked
@@ -283,10 +293,6 @@ is a plain `launchd` plist scoped to this project — not wired into the
 separate `nix-local-rag`/home-manager config, so it's simple to install,
 inspect, or remove (`launchctl unload ...` + delete the file) without
 touching anything else.
-
-If you widen the crawl scope, keep `graph.js`'s `TOPIC_BRANCHES`/
-`BRANCH_SOURCES` in sync with `scripts/chunking.js`'s `TOPIC_MAP`, or the
-menu branches will silently return no results.
 
 **Durable version** (`scripts/inngest/`) — same logic (shared via
 `scripts/chunking.js`), but each page is an independent, retried
