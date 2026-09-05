@@ -174,7 +174,7 @@ simulates a process crash (compiles a fresh graph instance mid-conversation,
 same checkpointer/thread) to verify state survives it:
 
 ```sh
-node src/simulate.js "hi" "4" "29" "__RESTART__" "4" "3" "3" "no" "no"
+node src/simulate.js "hi" "2" "1" "__RESTART__" "menu" "1" "2"
 ```
 
 ## Keeping it running

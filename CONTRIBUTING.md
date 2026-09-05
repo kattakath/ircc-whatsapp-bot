@@ -8,7 +8,7 @@ welcome.
 ```sh
 npm install
 node src/test-pipeline.js "How to come to Canada?"   # retrieval+synthesis only, no WhatsApp
-node src/simulate.js "hi" "4" "29" "no" "no"          # full dialogue graph, no WhatsApp
+node src/simulate.js "hi" "2" "1"                      # full dialogue graph, no WhatsApp
 
 nix flake check -L                       # module eval + package build
 nix run nixpkgs#nixfmt-rfc-style -- .    # format all .nix (CI enforces this)
