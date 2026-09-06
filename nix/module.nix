@@ -10,9 +10,21 @@
 # from Nix. Two supported sources:
 #   - `environmentFile`: a KEY=value file outside Nix (chmod 600), sourced at
 #     launch. Works on any platform; REQUIRED on Linux.
-#   - Darwin only, when `environmentFile` is unset: the login Keychain, via
-#     `security find-generic-password` — same pattern as the
-#     telegramMcp/wpMcp/apifyMcp wrappers in nix-config's modules/shared/mcp.nix.
+#   - Darwin only, when `environmentFile` is unset: the login Keychain, read
+#     directly with `/usr/bin/security find-generic-password`.
+#
+# Why the raw `security` call rather than the fleet's own keychain-secrets flake
+# (github:kattakath/nix-keychain-secrets)? DEPENDENCY DIRECTION: it is not an
+# input here (see flake.nix), and a standalone public flake should not take a
+# hard input on a personal secrets flake to gain nothing. Grepped
+# keychain-secrets/modules for a read option — only
+# `programs.keychainSecrets.{enable,loaderRelPath}` exists
+# (modules/keychain-secrets.nix:156-158), no per-service read → custom. Its
+# reusable `secret get` bottoms out in exactly the call below anyway
+# (packages/secret.nix:35 sets `security=/usr/bin/security`; do_get at :75 runs
+# `find-generic-password -a "$account" -s "$1" -w`). The reason is NOT that a
+# launchd agent has no shell to source a loader in: `secret` is a plain
+# writeShellApplication store binary (same file, :31) an agent could exec.
 {
   config,
   lib,
@@ -31,10 +43,13 @@ let
       ''
     else if pkgs.stdenv.hostPlatform.isDarwin then
       ''
-        OPENAI_API_KEY="$(/usr/bin/security find-generic-password -a "$(id -un)" -s OPENAI_API_KEY -w 2>/dev/null || true)"
-        SERPER_API_KEY="$(/usr/bin/security find-generic-password -a "$(id -un)" -s SERPER_API_KEY -w 2>/dev/null || true)"
-        LANGCHAIN_API_KEY="$(/usr/bin/security find-generic-password -a "$(id -un)" -s LANGCHAIN_API_KEY -w 2>/dev/null || true)"
-        export OPENAI_API_KEY SERPER_API_KEY LANGCHAIN_API_KEY
+        # A miss stays non-fatal (`|| true` under the runner's `set -eu`): the
+        # key exports empty, and the required-key check below is what fails.
+        # Values only ever move variable-to-variable — never echoed, never argv.
+        for __key in OPENAI_API_KEY SERPER_API_KEY LANGCHAIN_API_KEY; do
+          export "$__key=$(/usr/bin/security find-generic-password -a "$(id -un)" -s "$__key" -w 2>/dev/null || true)"
+        done
+        unset __key
       ''
     else
       "";
