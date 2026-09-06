@@ -4,6 +4,8 @@
   inputs = {
     flake-parts.url = "github:hercules-ci/flake-parts";
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    treefmt-nix.url = "github:numtide/treefmt-nix";
+    treefmt-nix.inputs.nixpkgs.follows = "nixpkgs";
 
     # Optional local-RAG dependency (pgvector + Ollama, exposing an in-DB
     # embed() SQL function) -- see nix/module.nix's `localRag.enable`. Always
@@ -16,12 +18,13 @@
 
   outputs =
     inputs@{
-      self,
       flake-parts,
       nix-local-rag,
       ...
     }:
     flake-parts.lib.mkFlake { inherit inputs; } {
+      imports = [ inputs.treefmt-nix.flakeModule ];
+
       # x86_64-darwin deliberately excluded: nixpkgs-unstable (26.11) dropped
       # it entirely (Intel Mac sunset) -- pinning to an older nixpkgs just for
       # that one system isn't worth the added complexity here. The other
@@ -70,7 +73,18 @@
             '';
           };
 
-          formatter = pkgs.nixfmt-rfc-style;
+          # treefmt owns `nix fmt` and supplies its own `checks.treefmt` gate, so CI
+          # needs no hand-rolled formatting step: `nix flake check` runs the formatter
+          # from THIS flake's lock instead of the runner's ambient registry. Same tool
+          # set as every other fleet flake — a bare `formatter = pkgs.nixfmt-rfc-style`
+          # (what this was) formats but never LINTS, so statix anti-patterns and
+          # deadnix's unused bindings went uncaught here while siblings caught them.
+          treefmt = {
+            projectRootFile = "flake.nix";
+            programs.nixfmt.enable = true;
+            programs.deadnix.enable = true;
+            programs.statix.enable = true;
+          };
         };
     };
 }

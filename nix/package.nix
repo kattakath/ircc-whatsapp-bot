@@ -6,7 +6,6 @@
 # forbids. `--build-from-source` makes it compile against nixpkgs' own `vips`
 # instead (the standard nixpkgs fix for sharp-based packages).
 {
-  lib,
   buildNpmPackage,
   nodejs,
   vips,
