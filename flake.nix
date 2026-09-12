@@ -47,14 +47,32 @@
         #         localRag.enable = true; # no Postgres of your own? this provisions one.
         #       }; }
         #   ];
-        # nix-local-rag's module is always imported (see the input comment above)
-        # so `localRag.enable` has something to flip and `ragdbUri` has
-        # `services.pgvectorLocal.databaseUri` to default from either way.
-        homeManagerModules.default = {
-          imports = [
-            ./nix/module.nix
-            nix-local-rag.homeManagerModules.default
-          ];
+        # TWO module outputs, because "who provides pgvectorLocal" is the
+        # consumer's decision, not this flake's.
+        #
+        # `default` is batteries-included and UNCHANGED: it imports
+        # nix-local-rag's module so `localRag.enable` has something to flip and
+        # `ragdbUri` has `services.pgvectorLocal.databaseUri` to default from.
+        # That is the right shape for a host that has no pgvector of its own.
+        #
+        # `botOnly` is the same bot module WITHOUT that import, for a host that
+        # ALREADY declares `services.pgvectorLocal` — because two different
+        # fetches of nix-local-rag are two different store paths, and the module
+        # system hard-errors with "option declared multiple times" when both are
+        # imported into one config. Today a consumer can dodge that with a
+        # `follows` chain, but a `follows` needs a flake input to point AT: a
+        # host that vendors the module in-tree (no input at all) has nothing to
+        # chain to, and `botOnly` is the only way out. Opting out of an import is
+        # not expressible in `imports` itself, which is why this is a second
+        # output rather than an option.
+        homeManagerModules = {
+          default = {
+            imports = [
+              ./nix/module.nix
+              nix-local-rag.homeManagerModules.default
+            ];
+          };
+          botOnly = ./nix/module.nix;
         };
       };
 
