@@ -21,15 +21,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
-      - name: Formatting
-        run: |
-          find . -name '*.nix' -print0 |
-            xargs -0 nix run nixpkgs#nixfmt-rfc-style -- --check
       - name: Flake outputs well-formed
         run: nix flake show
+      # `nix flake check` BUILDS the checks, and the flake now declares three that
+      # each subsume one of the ambient steps this job used to run:
+      #
+      #   formatting          treefmt (nixfmt + statix + deadnix) over the tree,
+      #                       replacing `nix run nixpkgs#nixfmt-rfc-style --check`
+      #   project-gate        node --check over every file PLUS import resolution,
+      #                       replacing `nix run nixpkgs#nodejs -- --check`
+      #   toolchain-complete  asserts the devShell delivers what it promises,
+      #                       which nothing here checked at all
+      #
+      # The removed steps were not merely duplicates, they were STRICTLY WEAKER:
+      # each `nix run nixpkgs#...` resolved an UNPINNED registry entry, so CI could
+      # format or parse with a different tool version than `nix develop` does, and
+      # neither ran statix, deadnix or the import scan. The checks run from this
+      # flake's own pin.
       - name: Module eval + package build
         run: nix flake check -L
-      - name: Node syntax check
-        run: |
-          find src scripts -name '*.js' -print0 |
-            xargs -0 -n1 nix run nixpkgs#nodejs -- --check
