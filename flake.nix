@@ -23,7 +23,12 @@
       ...
     }:
     flake-parts.lib.mkFlake { inherit inputs; } {
-      imports = [ inputs.treefmt-nix.flakeModule ];
+      imports = [
+        inputs.treefmt-nix.flakeModule
+        # `nix flake check`'s three gates: formatting, toolchain-complete,
+        # project-gate. Its own module so this file stays inputs + composition.
+        ./nix/checks.nix
+      ];
 
       # x86_64-darwin deliberately excluded: nixpkgs-unstable (26.11) dropped
       # it entirely (Intel Mac sunset) -- pinning to an older nixpkgs just for
@@ -78,14 +83,19 @@
 
       perSystem =
         { pkgs, ... }:
+        let
+          # The dev toolchain, read from ONE place. `checks.toolchain-complete`
+          # (nix/checks.nix) imports this same file and asserts that every binary
+          # in its `requiredBins` resolves from its `packages` — so edit the list
+          # THERE, never inline here. A second list here is exactly what that
+          # check exists to make impossible.
+          toolchain = import ./nix/toolchain.nix { inherit pkgs; };
+        in
         {
           packages.default = pkgs.callPackage ./nix/package.nix { };
 
           devShells.default = pkgs.mkShell {
-            packages = [
-              pkgs.nodejs
-              pkgs.postgresql
-            ];
+            inherit (toolchain) packages;
             shellHook = ''
               echo "ircc-whatsapp-bot dev shell — npm install && npm start (see README for required env vars)"
             '';
