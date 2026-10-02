@@ -10,10 +10,17 @@ npm install
 node src/test-pipeline.js "How to come to Canada?"   # retrieval+synthesis only, no WhatsApp
 node src/simulate.js "hi" "2" "1"                      # full dialogue graph, no WhatsApp
 
-nix flake check -L                       # module eval + package build
-nix run nixpkgs#nixfmt-rfc-style -- .    # format all .nix (CI enforces this)
+npm run lint                             # offline gate: every .js parses, every
+                                         #   bare import resolves (no key, no DB)
+
+nix flake check -L                       # formatting + toolchain-complete + project-gate
+nix fmt                                  # nixfmt + deadnix + statix (CI enforces this)
 nix build                                # real buildNpmPackage derivation
 ```
+
+`nix flake check` runs `npm run lint` for you as `checks.project-gate`, against a
+node_modules vendored from `package-lock.json` — so it needs no network, and a
+lockfile bump is the only thing that can make it refetch.
 
 ## Guidelines
 
