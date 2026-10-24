@@ -27,7 +27,10 @@ flowchart LR
 - **Retrieval**: `src/db.js` queries the `docs` table in the local `ragdb`
   Postgres database (see `nix-local-rag`) for the IRCC page chunks closest
   to the question, using the in-DB `embed()` function (local Ollama,
-  nothing leaves the machine at the retrieval step).
+  nothing leaves the machine at the retrieval step). Because this database
+  can be shared with unrelated or private corpora, unscoped questions are
+  restricted to sources beginning with `ircc-`; PR and citizenship intake
+  narrows that further to its configured topic source.
 - **Web fallback (CRAG)**: `src/websearch.js` implements a simplified
   [Corrective RAG](https://docs.langchain.com/oss/python/langgraph/agentic-rag)
   pattern — `graph.js`'s `answerFreeform()` grades local retrieval by top

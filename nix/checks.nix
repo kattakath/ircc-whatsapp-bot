@@ -77,6 +77,7 @@
           ../package-lock.json
           ../src
           ../scripts
+          ../tests
         ];
       };
     in
@@ -158,6 +159,7 @@
               ln -s ${nodeModules}/node_modules node_modules
               export HOME="$TMPDIR"
               npm run --silent lint
+              npm test
               touch "$out"
             '';
       };
