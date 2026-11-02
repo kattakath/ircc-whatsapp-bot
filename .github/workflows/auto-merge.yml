@@ -1,26 +1,8 @@
 name: auto-merge
 
-# Arm GitHub's native auto-merge ("merge when ready") on pull requests authored by
-# the operator. With the `merge_queue` rule active on `main`, arming a PR ENQUEUES
-# it: GitHub builds the entry against the projected merged result and merges it
-# once the required `checks` context reports green on that entry. Nothing here
-# bypasses a gate — it only removes the manual click.
-#
-# WHY A MERGE QUEUE AND NOT JUST AUTO-MERGE. Plain auto-merge does not update a
-# stale head branch, so under "require branches to be up to date" a second open PR
-# sits armed forever behind the first. The queue exists for exactly that. (It is
-# also why this repo lives under the `kattakath` ORG: merge queue is rejected
-# outright on user-owned repositories.)
-#
-# WHY AN APP TOKEN, NOT `GITHUB_TOKEN`. Auto-merge attributes the merge to whoever
-# ARMED it, and events produced by the default `GITHUB_TOKEN` never start new
-# workflow runs. Arming with it would land every auto-merged PR on `main`
-# SILENTLY — `flakehub-publish.yml` would simply stop firing. An installation
-# token from the CI bot GitHub App carries no such suppression.
-#
-# Requires, per repo: the CI bot App installed here, plus `vars.CI_BOT_CLIENT_ID`
-# and `secrets.CI_BOT_APP_PRIVATE_KEY`. See kattakath/nix-config →
-# docs/auto-merge-and-merge-queue.md for the fleet-wide picture.
+# Thin caller. The logic, and why it needs an App token rather than GITHUB_TOKEN, lives in
+# kattakath/.github/.github/workflows/auto-merge.yml. With the merge queue on, arming means
+# "queue once `gate` is green", so open work in progress as a DRAFT.
 
 on:
   pull_request:
@@ -28,36 +10,16 @@ on:
 
 concurrency:
   group: auto-merge-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+  # false: `true` let a later event cancel the ready_for_review arm run (kattakath/nix-config #750).
+  cancel-in-progress: false
 
 permissions:
   contents: read
 
 jobs:
-  auto-merge:
-    name: arm auto-merge
-    # The operator's OWN, non-draft PRs only. `github.repository_owner` is NOT
-    # usable: this repo lives under the `kattakath` owner while PRs are authored by
-    # the `ismailkattakath` account. The guard also means a fork PR never reaches
-    # the App-token step, which needs a secret a fork cannot read.
-    if: >-
-      github.event.pull_request.draft == false &&
-      github.event.pull_request.user.login == 'ismailkattakath'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    steps:
-      - id: app-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          client-id: ${{ vars.CI_BOT_CLIENT_ID }}
-          private-key: ${{ secrets.CI_BOT_APP_PRIVATE_KEY }}
-
-      # Idempotent — re-arming an already-armed PR is a no-op, which is what makes
-      # the `synchronize` trigger safe: it RE-ARMS a PR the queue ejected (a
-      # conflict, or a failed queue build) as soon as the fix is pushed. Conflicts
-      # are never auto-resolved; this only re-queues once the branch is mergeable.
-      - name: Arm auto-merge
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          PR_URL: ${{ github.event.pull_request.html_url }}
-        run: gh pr merge --auto --squash "$PR_URL"
+  arm:
+    uses: kattakath/.github/.github/workflows/auto-merge.yml@3d5ad5b9e04c853dbb0d82446255c9ef9230332a
+    with:
+      client-id: ${{ vars.CI_BOT_CLIENT_ID }}
+    secrets:
+      app-private-key: ${{ secrets.CI_BOT_APP_PRIVATE_KEY }}
