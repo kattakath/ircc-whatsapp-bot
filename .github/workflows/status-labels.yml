@@ -1,0 +1,20 @@
+name: status-labels
+
+# Thin caller: keeps the derived `auto-merge` / `merge-queue` labels in sync with live PR
+# state. Why pull_request_target is safe here: kattakath/.github's status-labels.yml header.
+
+on:
+  pull_request_target:
+    types: [auto_merge_enabled, auto_merge_disabled, enqueued, dequeued, closed, reopened, synchronize]
+
+concurrency:
+  group: status-labels-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  pull-requests: write
+  issues: write
+
+jobs:
+  sync:
+    uses: kattakath/.github/.github/workflows/status-labels.yml@3d5ad5b9e04c853dbb0d82446255c9ef9230332a

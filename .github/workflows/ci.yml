@@ -1,20 +1,43 @@
 name: CI
+# ONE FULL RUN PER PR (kattakath/.github's shared landing system). `gate` is the only
+# required check: it asserts each needed job ended exactly as the event expects. `checks`
+# runs once, in the merge queue when vars.QUEUE_ENABLED is 'true', otherwise on the PR; fork
+# PRs always get it on the PR. No `push: main` leg: the queue tests the very commit main gets.
 on:
-  push:
-    branches: [main]
   pull_request:
   # REQUIRED by the merge queue: a queue entry is built on its own
   # `gh-readonly-queue/main/...` ref, which emits NEITHER `pull_request` NOR
-  # `push`. Without this trigger the required `checks` context never reports on a
+  # `push`. Without this trigger the required context never reports on a
   # queued entry and every merge times out.
   merge_group:
+    types: [checks_requested]
+  workflow_dispatch:
 
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  # Supersede stale PR runs; never cancel a queue run (the queue would eject the PR).
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
 
 jobs:
+  # THE ONLY REQUIRED CHECK. Every ruleset names it; never rename it.
+  gate:
+    if: ${{ !cancelled() }}
+    needs: [checks]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      # `expect` is a deliberate SECOND copy of `checks`' `if:`; if they drift, gate goes red.
+      - uses: kattakath/.github/actions/gate@3d5ad5b9e04c853dbb0d82446255c9ef9230332a
+        with:
+          needs: ${{ toJSON(needs) }}
+          expect: >-
+            {"checks": ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository || vars.QUEUE_ENABLED != 'true' }}}
+
   checks:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository || vars.QUEUE_ENABLED != 'true'
     runs-on: macos-latest
     permissions:
       contents: read

@@ -42,3 +42,12 @@ lockfile bump is the only thing that can make it refetch.
   and the README together — don't let them drift.
 - Update `README.md` for user-facing changes; CI (format + `nix flake check`)
   must pass.
+
+## How a PR lands
+
+- **`gate` is the only required check.** It passes only when every other CI job ended as
+  expected for the event.
+- **Fork PRs run the full `checks` suite on the PR**, so you see real failures before review.
+- **A maintainer merges through the merge queue.** The queue re-runs `checks` on your change
+  combined with the latest `main`, and merges it if green. If it fails there, the PR leaves
+  the queue with the reason on its timeline. Push a fix and a maintainer re-queues it.
