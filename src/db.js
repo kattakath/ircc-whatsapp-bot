@@ -1,4 +1,5 @@
 import pg from "pg";
+import { buildRetrieveQuery } from "./retrieval-query.js";
 
 // Loopback-only, trust-auth role scoped to ragdb — see
 // https://github.com/kattakath/nix-local-rag (modules/pgvector-local.nix).
@@ -12,30 +13,14 @@ const pool = new pg.Pool({ connectionString: DATABASE_URI });
 const SIMILARITY_FLOOR = 0.3;
 
 /**
- * Retrieve the top-k IRCC chunks for a question, optionally scoped to one
- * or more `source` values (e.g. ["ircc-crawl-pr", "ircc-crawl-citizenship"]).
+ * Retrieve the top-k IRCC chunks for a question, optionally narrowed to one
+ * or more `source` values (e.g. ["ircc-crawl-pr"]). The shared docs table may
+ * contain private or unrelated corpora, so unscoped retrieval is IRCC-only.
  * Returns [] if nothing clears SIMILARITY_FLOOR.
  */
 export async function retrieve(question, { sources = null, limit = 8 } = {}) {
-  const params = [question];
-  let sourceFilter = "";
-  if (sources && sources.length > 0) {
-    params.push(sources);
-    sourceFilter = `WHERE metadata->>'source' = ANY($${params.length}::text[])`;
-  }
-  params.push(limit);
-
-  const sql = `
-    SELECT content,
-           metadata,
-           1 - (embedding <=> embed($1)) AS similarity
-    FROM docs
-    ${sourceFilter}
-    ORDER BY embedding <=> embed($1)
-    LIMIT $${params.length}
-  `;
-
-  const { rows } = await pool.query(sql, params);
+  const query = buildRetrieveQuery(question, { sources, limit });
+  const { rows } = await pool.query(query.sql, query.params);
   return rows.filter((r) => r.similarity >= SIMILARITY_FLOOR);
 }
 
