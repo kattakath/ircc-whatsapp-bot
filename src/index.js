@@ -7,8 +7,9 @@ import qrcode from "qrcode-terminal";
 import pino from "pino";
 import { builder } from "./graph.js";
 
-// One checkpointer/compiled graph shared across the whole process — reuses
-// the same ragdb Postgres already running for retrieval. setup() creates the
+// One checkpointer/compiled graph shared across the whole process — on the
+// local Postgres at RAGDB_URI (retrieval itself is Cloudflare AI Search, see
+// src/aisearch.js; only checkpoints live here). setup() creates the
 // checkpoint tables if they don't exist yet (idempotent, safe to call once).
 const checkpointer = PostgresSaver.fromConnString(
   process.env.RAGDB_URI ?? "postgresql://mcp@127.0.0.1:5433/ragdb"

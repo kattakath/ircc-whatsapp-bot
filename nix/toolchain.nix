@@ -14,7 +14,7 @@
 {
   packages = [
     pkgs.nodejs # node, npm, npx — package.json's `engines.node` is >=22
-    pkgs.postgresql # psql, for poking the pgvector RAG store by hand
+    pkgs.postgresql # psql, for poking the checkpoint Postgres by hand
   ];
 
   # The BINARY names the above must put on PATH, and that this project's own code
@@ -22,7 +22,7 @@
   #   node  — scripts/recrawl.js execFileSync's bare "node"
   #   npm   — CONTRIBUTING.md's dev loop (`npm install`, `npm run lint`)
   #   npx   — ad-hoc tooling; ships with nodejs, so dropping nodejs drops it too
-  #   psql  — README's RAG-store inspection steps
+  #   psql  — inspecting the checkpoint Postgres by hand
   #
   # Writing them down is the whole of what turns `toolchain-complete` from a
   # tautology into a gate, because a PACKAGE name is not a BINARY name: one

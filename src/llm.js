@@ -76,7 +76,7 @@ const HIGH_STAKES_NOTE =
   "should not wait to get professional help.";
 
 /**
- * chunks: [{ content, metadata, similarity }]
+ * chunks: [{ content, metadata, similarity, live? }]
  * Returns a plain-text answer suitable for a WhatsApp message.
  */
 export async function synthesize(question, chunks) {
@@ -101,10 +101,13 @@ export async function synthesize(question, chunks) {
 
   const context = chunks
     .map((c, i) => {
-      // similarity is null for CRAG web-fallback chunks (websearch.js) —
-      // those aren't vector-search results, so there's no score to show.
-      const provenance =
-        c.similarity == null ? "live canada.ca search" : `similarity ${c.similarity.toFixed(2)}`;
+      // `live` marks CRAG web-fallback chunks (websearch.js); a retrieved
+      // chunk with no similarity is a keyword-only hit from the hybrid index.
+      const provenance = c.live
+        ? "live canada.ca search"
+        : c.similarity == null
+          ? "keyword match"
+          : `similarity ${c.similarity.toFixed(2)}`;
       return (
         `[${i + 1}] (${provenance}) ${c.metadata.title ?? ""}\n` +
         `URL: ${c.metadata.url ?? "unknown"}\n${c.content}`

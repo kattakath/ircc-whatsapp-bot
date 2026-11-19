@@ -1,6 +1,6 @@
 import { StateGraph, Annotation, interrupt, Command, START, END } from "@langchain/langgraph";
 import { PostgresSaver } from "@langchain/langgraph-checkpoint-postgres";
-import { retrieve } from "./db.js";
+import { retrieve, topSimilarity } from "./db.js";
 import { synthesize } from "./llm.js";
 import { webFallback, persistWebFallback } from "./websearch.js";
 
@@ -191,18 +191,21 @@ function looksLikeRealQuestion(text) {
 }
 
 // CRAG-style grading, simplified: real CRAG grades each doc via an LLM into
-// correct/incorrect/ambiguous. Here the grade is the top cosine-similarity
-// score against a stricter threshold than db.js's own SIMILARITY_FLOOR
-// (0.3, which just filters noise) — below GRADE_THRESHOLD, local retrieval
-// is treated as "incorrect" and discarded in favor of a canada.ca-scoped
-// live search, same as CRAG's incorrect branch. This trades grading
+// correct/incorrect/ambiguous. Here the grade is the best vector (cosine)
+// similarity among the retrieved chunks — not chunks[0]'s, because the store
+// ranks by a hybrid fused score and its top hit can be keyword-only, with no
+// vector score at all — against a stricter threshold than db.js's own
+// SIMILARITY_FLOOR (0.3, which just filters noise). Both thresholds were set
+// on the old local embeddings and want re-checking on AI Search's model.
+// Below GRADE_THRESHOLD, retrieval is treated as "incorrect" and discarded
+// in favor of a canada.ca-scoped live search, same as CRAG's incorrect branch. This trades grading
 // precision for zero extra latency (an LLM grading call would stack with
 // the already-slow synthesis call).
 const GRADE_THRESHOLD = 0.5;
 
 async function answerFreeform(question, sources = null) {
   let chunks = await retrieve(question, { sources });
-  const gradedWell = chunks.length > 0 && chunks[0].similarity >= GRADE_THRESHOLD;
+  const gradedWell = topSimilarity(chunks) >= GRADE_THRESHOLD;
 
   if (!gradedWell) {
     const webChunks = await webFallback(question);

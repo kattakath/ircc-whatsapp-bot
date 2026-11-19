@@ -12,13 +12,15 @@ node src/simulate.js "hi" "2" "1"                      # full dialogue graph, no
 
 npm run lint                             # offline gate: every .js parses, every
                                          #   bare import resolves (no key, no DB)
+npm test                                 # offline unit tests (node:test, fetch mocked:
+                                         #   never calls the live AI Search API)
 
 nix flake check -L                       # formatting + toolchain-complete + project-gate
 nix fmt                                  # nixfmt + deadnix + statix (CI enforces this)
 nix build                                # real buildNpmPackage derivation
 ```
 
-`nix flake check` runs `npm run lint` for you as `checks.project-gate`, against a
+`nix flake check` runs `npm run lint` and `npm test` for you as `checks.project-gate`, against a
 node_modules vendored from `package-lock.json` — so it needs no network, and a
 lockfile bump is the only thing that can make it refetch.
 
@@ -30,7 +32,7 @@ lockfile bump is the only thing that can make it refetch.
   `interrupt()` would double-fire. Only `src/index.js` sends WhatsApp
   messages, driven by the graph's output.
 - If you widen the RAG crawl scope, keep `graph.js`'s `TOPIC_BRANCHES`/
-  `BRANCH_SOURCES` in sync with `scripts/chunking.js`'s `TOPIC_MAP` — a
+  `BRANCH_SOURCES` in sync with `scripts/crawl-pages.js`'s `TOPIC_MAP` — a
   mismatch makes a menu branch silently return zero results.
 - Never run a built binary (or `nix build`'s `result/`) from a checkout that
   holds a *live, paired* `auth/` session while that session's real bot

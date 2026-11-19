@@ -5,7 +5,8 @@
 //
 // Requires APIFY_TOKEN in the environment (already registered via
 // `secret set APIFY_TOKEN` in this setup) plus everything ingest-crawl.js
-// needs (local ragdb Postgres + Ollama running).
+// needs: CF_ACCOUNT_ID, and the AI Search token (CLOUDFLARE_AI_SEARCH_TOKEN,
+// or on macOS the login-Keychain item src/aisearch.js falls back to).
 //
 // Usage: node scripts/recrawl.js
 import "dotenv/config";
@@ -73,7 +74,7 @@ async function main() {
   }
 
   if (run.status !== "SUCCEEDED") {
-    console.error(`Crawl did not succeed: ${run.status}. Aborting — not touching existing ragdb content.`);
+    console.error(`Crawl did not succeed: ${run.status}. Aborting — not touching the existing AI Search items.`);
     process.exit(1);
   }
 

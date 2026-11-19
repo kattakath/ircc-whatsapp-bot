@@ -36,7 +36,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const ROOTS = ["src", "scripts"];
+const ROOTS = ["src", "scripts", "test"];
 const builtins = new Set(builtinModules);
 
 /** Every *.js under `dir`, recursively. `node_modules` is never descended into. */

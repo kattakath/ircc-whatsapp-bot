@@ -6,7 +6,7 @@
 [![LangGraph.js](https://img.shields.io/badge/dialogue-LangGraph.js-1C3C3C.svg)](https://docs.langchain.com/oss/javascript/langgraph)
 
 A WhatsApp bot that answers Canadian immigration questions grounded in
-official IRCC (canada.ca) pages, via a local pgvector RAG store. Built to
+official IRCC (canada.ca) pages, via a Cloudflare AI Search RAG store. Built to
 informally help a friend explore her options — not a licensed immigration
 consulting tool. See "Legal boundary" below.
 
@@ -15,7 +15,7 @@ flowchart LR
     WA["WhatsApp\n(Baileys)"] <--> IDX["index.js\ntransport + allowlist"]
     IDX <--> GRAPH["graph.js\nLangGraph.js dialogue"]
     CKPT[("Postgres\ncheckpointer")] <--> GRAPH
-    GRAPH --> DB[("ragdb\npgvector + embed()")]
+    GRAPH --> DB[("Cloudflare AI Search\nhybrid vector + keyword")]
     DB -. "similarity < 0.5" .-> WEB["websearch.js\nCRAG: Serper, site:canada.ca"]
     WEB -. "persist\nfor next time" .-> DB
     GRAPH --> LLM["llm.js\nOpenAI synthesis"]
@@ -24,24 +24,36 @@ flowchart LR
 
 ## How it works
 
-- **Retrieval**: `src/db.js` queries the `docs` table in the local `ragdb`
-  Postgres database (see `nix-local-rag`) for the IRCC page chunks closest
-  to the question, using the in-DB `embed()` function (local Ollama,
-  nothing leaves the machine at the retrieval step).
+- **Retrieval**: `src/db.js` searches one private
+  [Cloudflare AI Search](https://developers.cloudflare.com/ai-search/)
+  instance (`src/aisearch.js`, plain `fetch` against its REST API) for the
+  IRCC page chunks closest to the question. The instance chunks and embeds
+  every page itself and ranks hybrid (vector + keyword). **The question
+  leaves the machine at this step**: it goes to Cloudflare, which embeds it
+  server-side. The instance is shared with other corpora, so every search is
+  scoped to the `ircc` and `ircc-live` corpora — by an API filter *and*
+  again on each returned chunk's own metadata. Retrieval moved here from a
+  local pgvector + Ollama store on 2026-11-19, so the same corpus serves
+  every client, not only the machine running Postgres.
 - **Web fallback (CRAG)**: `src/websearch.js` implements a simplified
   [Corrective RAG](https://docs.langchain.com/oss/python/langgraph/agentic-rag)
-  pattern — `graph.js`'s `answerFreeform()` grades local retrieval by top
-  cosine-similarity (`GRADE_THRESHOLD = 0.5`, stricter than `db.js`'s own
-  noise-filtering `SIMILARITY_FLOOR = 0.3`); below that, local results are
+  pattern — `graph.js`'s `answerFreeform()` grades retrieval by the best
+  vector (cosine) similarity among the returned chunks (`GRADE_THRESHOLD =
+  0.5`, stricter than `db.js`'s own noise-filtering `SIMILARITY_FLOOR = 0.3`;
+  both were tuned on the old local embeddings and want re-checking on AI
+  Search's model). The instance's top-level `score` is a fused hybrid rank,
+  not a similarity, so it is never graded on. Below the threshold, results are
   **discarded** (not blended) in favor of a live, `site:canada.ca`-scoped
   search via [Serper.dev](https://serper.dev). This exists specifically to
   avoid the LLM falling back to ungrounded parametric knowledge when local
   retrieval is weak — the fallback is always another official source, never
   open-web or the model's own trained knowledge (the system prompt in
-  `llm.js` forbids that regardless). Self-learning: a successful web-fallback
-  answer's content is persisted into `ragdb` under `source="ircc-live"`, so
-  a similar future question is answered from local retrieval instead of
-  triggering another live search. Requires `SERPER_API_KEY`; without it, web
+  `llm.js` forbids that regardless). Self-learning: each page a successful
+  web fallback fetched is uploaded to AI Search as one item (corpus and
+  source `ircc-live`, keyed by its URL, so a re-fetch overwrites it), and a
+  similar future question is answered from retrieval instead of triggering
+  another live search. Vector search sees a new item only once indexing
+  finishes (minutes); keyword search sees it at once. Requires `SERPER_API_KEY`; without it, web
   fallback silently no-ops and the existing "I don't have that info" answer
   is used instead.
 - **Synthesis**: `src/llm.js` sends the retrieved chunks + question to the
@@ -75,8 +87,8 @@ flowchart LR
   This is built as a [LangGraph.js](https://docs.langchain.com/oss/javascript/langgraph)
   `StateGraph`, not a hand-rolled state machine — each menu/prompt step is a
   node that pauses on `interrupt()` waiting for the next WhatsApp message,
-  and conversation state is checkpointed to Postgres (`ragdb`, via
-  `@langchain/langgraph-checkpoint-postgres`'s `PostgresSaver`), keyed by
+  and conversation state is checkpointed to a local Postgres (`RAGDB_URI`,
+  via `@langchain/langgraph-checkpoint-postgres`'s `PostgresSaver`), keyed by
   WhatsApp JID as the LangGraph `thread_id`. This means a conversation
   (including mid-intake, e.g. she's answered 3 of 6 PR questions) survives
   the bot process crashing or restarting — verified in
@@ -107,8 +119,9 @@ a single-friend prototype needs, but LangGraph's checkpointing *pattern* —
 persist state at every step, resumable across process restarts — directly
 solves this exact bug. Since this was worth doing regardless of scale, the
 whole dialogue engine now runs on LangGraph.js with `PostgresSaver`
-checkpointing against the already-running `ragdb` Postgres, rather than
-reimplementing that pattern by hand.
+checkpointing against the already-running local Postgres (`RAGDB_URI` —
+the one that also held the retrieval corpus until it moved to AI Search),
+rather than reimplementing that pattern by hand.
 
 ## Setup
 
@@ -122,7 +135,17 @@ Environment variables:
   reply). Set to `gpt-5.5-pro` for deeper reasoning at the cost of 30-90s
   per reply — no code change needed either way, `client.responses.create`
   works for both tiers.
+- `CF_ACCOUNT_ID` — required: the Cloudflare account holding the AI Search
+  instance. Not a secret, but per-operator, so it never lives in this repo.
+- `CLOUDFLARE_AI_SEARCH_TOKEN` — required: an API token with AI Search
+  access. On macOS you can leave it unset and store it in the login Keychain
+  instead (`secret set cf:cloudflare.com:ai-search`, or any generic-password
+  item with that service name and your login user as the account):
+  `src/aisearch.js` reads it from there, for the bot and the re-crawl/ingest
+  scripts alike. The token is never logged.
+- `CF_AI_SEARCH_INSTANCE` — optional, defaults to `rag`.
 - `RAGDB_URI` — optional, defaults to `postgresql://mcp@127.0.0.1:5433/ragdb`.
+  Used only by the LangGraph checkpointer now.
 - `SERPER_API_KEY` — optional but needed for CRAG web fallback (see above);
   free tier at [serper.dev](https://serper.dev). Without it, weak local
   retrieval just falls through to the existing "I don't have that info"
@@ -162,7 +185,11 @@ primary daily-driver number, a ban takes out their real WhatsApp too.
    across restarts — no need to rescan every time.
 5. Message that number from her phone to start the conversation.
 
-To test the retrieval+synthesis pipeline without touching WhatsApp at all:
+To run the offline unit tests (no network: `fetch` is mocked, so they never
+touch the live AI Search instance): `npm test`.
+
+To test the retrieval+synthesis pipeline without touching WhatsApp at all
+(this one is live: AI Search + OpenAI):
 
 ```sh
 node src/test-pipeline.js "How to come to Canada?"
@@ -214,33 +241,35 @@ Supported systems: `x86_64-linux`, `aarch64-linux`, `aarch64-darwin`
 ```
 
 See `nix/module.nix` for the full option surface (`package`, `stateDir`,
-`model`, `langsmithTracing`/`langsmithProject`, `ragdbUri`, `localRag.enable`,
-`environmentFile`). Secrets (`OPENAI_API_KEY`/`SERPER_API_KEY`/
-`LANGCHAIN_API_KEY`) are never read from Nix: set `environmentFile` to a
-`KEY=value` file outside Nix (required on Linux), or on Darwin leave it
-unset to fall back to login-Keychain lookups. Runs under `launchd` on
+`model`, `langsmithTracing`/`langsmithProject`, `aiSearch.accountId`/
+`aiSearch.instance`, `ragdbUri`, `localRag.enable`, `environmentFile`).
+`aiSearch.accountId` is the Cloudflare account id (set it in the consuming
+flake, or put `CF_ACCOUNT_ID` in `environmentFile`). Secrets
+(`OPENAI_API_KEY`/`SERPER_API_KEY`/`LANGCHAIN_API_KEY`/
+`CLOUDFLARE_AI_SEARCH_TOKEN`) are never read from Nix: set `environmentFile`
+to a `KEY=value` file outside Nix (required on Linux), or on Darwin leave it
+unset to fall back to login-Keychain lookups (the AI Search token's item is
+`cf:cloudflare.com:ai-search`). Runs under `launchd` on
 Darwin, `systemd --user` on Linux (Linux path is real but untested — no
 Linux host runs this today).
 
-**The RAG database dependency**: this bot needs a reachable Postgres with
-pgvector and an `embed(text)` SQL function (see "What's in the RAG store
-right now" below). That's genuinely third-party infrastructure, not
-something bundled into this flake — bundling it in would
-mean any host running something *else* that also needs Postgres/Ollama (a
-real case: this repo's own author also runs a separate voice-assistant tool
-against the same local Ollama) ends up with two redundant, possibly
-conflicting instances. Instead, following the same
-`services.<app>.database.createLocally` idiom nixpkgs itself uses (see e.g.
-`services.paperless.database.createLocally`):
-- **Already have a compatible Postgres?** Leave `localRag.enable` at its
-  default (`false`) and point `ragdbUri` at it.
+**The Postgres dependency (checkpoints only)**: the bot needs a reachable
+Postgres for its LangGraph checkpoints. Retrieval no longer touches it —
+that is Cloudflare AI Search. A database is genuinely third-party
+infrastructure, not something bundled into this flake: bundling it in would
+mean any host running something *else* that also needs Postgres ends up
+with two redundant, possibly conflicting instances. Instead, following the
+same `services.<app>.database.createLocally` idiom nixpkgs itself uses (see
+e.g. `services.paperless.database.createLocally`):
+- **Already have a Postgres?** Leave `localRag.enable` at its default
+  (`false`) and point `ragdbUri` at it.
 - **Starting from nothing?** Set `localRag.enable = true` — this module
   always imports [nix-local-rag](https://github.com/kattakath/nix-local-rag)
   (a separate, independently reusable flake: pgvector + Ollama, launchd/
-  home-manager, no API key, nothing leaves the machine) and, when enabled,
-  turns on its `services.pgvectorLocal`/`services.ollamaLocal` for you.
-  `ragdbUri` already defaults to that service's own connection string, so
-  no further config is needed either way.
+  home-manager) and, when enabled, turns on its
+  `services.pgvectorLocal`/`services.ollamaLocal` for you. `ragdbUri`
+  already defaults to that service's own connection string, so no further
+  config is needed either way.
 
 **Caution**: never run the built binary (or `nix build`'s `result/`) from a
 directory that holds a *live, paired* `auth/` session while that session's
@@ -252,21 +281,29 @@ manual checkout's `auth/`.
 
 ## What's in the RAG store right now
 
-**3,170 chunks** from **300 official canada.ca IRCC pages**, crawled via the
-Apify `apify/website-content-crawler` actor from the 5 top-level `/services/`
-hub pages (citizenship, immigrate/PR, study, work, visit), scoped to
+**300 official canada.ca IRCC pages**, one AI Search item each (corpus
+`ircc`; the instance chunks and embeds them — the old pgvector store held
+the same pages as 3,170 hand-made chunks), plus the CRAG write-backs
+(corpus `ircc-live`). The pages were crawled via the Apify
+`apify/website-content-crawler` actor from the 5 top-level `/services/` hub
+pages (citizenship, immigrate/PR, study, work, visit), scoped to
 `.../services/**` (depth 3, capped at 300 pages — deliberately bounded, not
 the entire canada.ca domain, to avoid diluting retrieval with press
 releases/corporate content). Adaptive rendering handles JS-heavy pages
 properly, unlike the original plain-fetch ingestion.
 
-Each chunk is tagged with a per-topic `source` derived from its URL path
+Each item's key is derived from its page URL (`itemKey` in
+`src/aisearch.js` — `ircc/<url slug>-<sha1 prefix>.md`, byte-identical to the
+key the one-off migration export gave it, pinned by `npm test`), so
+re-ingesting a page overwrites its item instead of adding a duplicate.
+
+Each page is tagged with a per-topic `source` derived from its URL path
 (`ircc-crawl-citizenship`, `ircc-crawl-pr`, `ircc-crawl-study`,
 `ircc-crawl-work`, `ircc-crawl-visit`, `ircc-crawl-refugees`,
 `ircc-crawl-passports`, `ircc-crawl-other` for everything else under
 `/services/` — mostly application forms/guides) — `graph.js`'s
 `TOPIC_BRANCHES`/`BRANCH_SOURCES` filter retrieval by these exact tags, so
-if you re-crawl, keep the tag scheme in sync with `scripts/chunking.js`'s
+if you re-crawl, keep the tag scheme in sync with `scripts/crawl-pages.js`'s
 `TOPIC_MAP`, or the menu branches will silently return no results.
 
 **Staleness risk**: this content changes — the initial crawl already picked
@@ -279,8 +316,14 @@ node scripts/recrawl.js
 ```
 Standalone — triggers the Apify actor via its REST API (needs
 `APIFY_TOKEN` in `.env`), polls for completion, downloads the dataset, and
-runs it through `ingest-crawl.js` (which clears all existing `ircc-crawl-*`
-rows first, so it's safe to re-run). No interactive MCP tools needed.
+runs it through `ingest-crawl.js`: every page is an upsert, so it's safe
+to re-run. Once **every** upload has succeeded, it deletes the `ircc/` items
+from this tag prefix that the new crawl no longer contains — and refuses to
+delete anything if an upload failed, the crawl came back implausibly small
+(under half the existing items), or an item has no metadata yet (still
+indexing). `ircc-live` items are never deleted. Needs `CF_ACCOUNT_ID` (in
+`.env`) and the AI Search token (env or Keychain, as above). No interactive
+MCP tools needed.
 
 **To run it automatically, monthly**:
 ```sh
@@ -289,24 +332,21 @@ launchctl load ~/Library/LaunchAgents/com.ismailkattakath.ircc-whatsapp-bot.recr
 ```
 Runs the 1st of each month at 3am (before the bot would typically be in
 active use). Logs to `~/Library/Logs/ircc-whatsapp-bot-recrawl.log`. This
-is a plain `launchd` plist scoped to this project — not wired into the
-separate `nix-local-rag`/home-manager config, so it's simple to install,
+is a plain `launchd` plist scoped to this project — not wired into
+home-manager, so it's simple to install,
 inspect, or remove (`launchctl unload ...` + delete the file) without
 touching anything else.
 
 **Durable version** (`scripts/inngest/`) — same logic (shared via
-`scripts/chunking.js`), but each page is an independent, retried
+`scripts/crawl-pages.js`), but each page is an independent, retried
 [Inngest](https://www.inngest.com) step instead of one long synchronous
-loop. A crash/kill mid-run resumes without redoing already-completed
-pages, verified by killing the process mid-ingest and confirming the
-resumed run finished with the exact correct total and zero duplicate
-rows. Each page's inserts run in one DB transaction — `step.run` only
-memoizes on full completion, so a step killed mid-page would otherwise
-redo that one page's inserts on retry (found this by testing, not
-theory) — the transaction makes a killed step's partial work roll back
-cleanly instead of leaving duplicates. Useful for a large/flaky re-crawl;
-overkill for the normal case (`ingest-crawl.js` already worked fine
-twice, ~2 min for 300 pages, 0 errors). To use:
+loop, and the stale cleanup is a last step that runs only after every page
+step succeeded. A crash/kill mid-run resumes without redoing
+already-completed pages. A step killed mid-page simply re-runs: the page is
+one upsert keyed by its URL, so a retry overwrites the same item rather than
+adding a duplicate (the old pgvector ingest needed a per-page transaction
+for that). Useful for a large/flaky re-crawl; overkill for the normal case.
+To use:
 ```sh
 npm run inngest:serve        # terminal 1
 inngest dev                  # terminal 2 (local Dev Server, UI on :8288)
