@@ -16,7 +16,7 @@ flowchart LR
     IDX <--> GRAPH["graph.js\nLangGraph.js dialogue"]
     CKPT[("Postgres\ncheckpointer")] <--> GRAPH
     GRAPH --> DB[("Cloudflare AI Search\nhybrid vector + keyword")]
-    DB -. "similarity < 0.5" .-> WEB["websearch.js\nCRAG: Serper, site:canada.ca"]
+    DB -. "similarity < 0.6" .-> WEB["websearch.js\nCRAG: Serper, site:canada.ca"]
     WEB -. "persist\nfor next time" .-> DB
     GRAPH --> LLM["llm.js\nOpenAI synthesis"]
     LLM --> GRAPH
@@ -39,9 +39,9 @@ flowchart LR
   [Corrective RAG](https://docs.langchain.com/oss/python/langgraph/agentic-rag)
   pattern — `graph.js`'s `answerFreeform()` grades retrieval by the best
   vector (cosine) similarity among the returned chunks (`GRADE_THRESHOLD =
-  0.5`, stricter than `db.js`'s own noise-filtering `SIMILARITY_FLOOR = 0.3`;
-  both were tuned on the old local embeddings and want re-checking on AI
-  Search's model). The instance's top-level `score` is a fused hybrid rank,
+  0.6`, stricter than `db.js`'s own noise-filtering `SIMILARITY_FLOOR = 0.45`;
+  both measured on AI Search's embedding model with
+  `scripts/threshold-probe.mjs`, which re-runs the measurement). The instance's top-level `score` is a fused hybrid rank,
   not a similarity, so it is never graded on. Below the threshold, results are
   **discarded** (not blended) in favor of a live, `site:canada.ca`-scoped
   search via [Serper.dev](https://serper.dev). This exists specifically to
