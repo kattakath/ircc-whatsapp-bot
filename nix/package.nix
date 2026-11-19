@@ -36,7 +36,7 @@ buildNpmPackage {
   inherit nodejs;
 
   meta = {
-    description = "WhatsApp bot answering Canadian immigration questions, grounded in official IRCC content via a local pgvector RAG store";
+    description = "WhatsApp bot answering Canadian immigration questions, grounded in official IRCC content via a Cloudflare AI Search RAG store";
     homepage = "https://github.com/kattakath/ircc-whatsapp-bot";
     mainProgram = "ircc-whatsapp-bot";
   };

@@ -1,30 +1,24 @@
 import fs from "node:fs";
-import pg from "pg";
 import { inngest } from "./client.js";
-import { chunkMarkdown, topicFor, titleFor } from "../chunking.js";
-
-const pool = new pg.Pool({
-  connectionString: process.env.RAGDB_URI ?? "postgresql://mcp@127.0.0.1:5433/ragdb",
-});
+import { upsertItem } from "../../src/aisearch.js";
+import { deleteStale, pageItem } from "../crawl-pages.js";
 
 /**
  * Durable version of scripts/ingest-crawl.js. Each page is its own
  * `step.run` — Inngest memoizes completed steps, so if the run crashes or
- * is retried partway through a 300-page dataset, already-ingested pages
+ * is retried partway through a 300-page dataset, already-uploaded pages
  * are NOT redone; only the page that failed (and anything after it)
- * re-runs. The plain CLI script has no such protection — a crash midway
- * means starting over from page 0 (each rerun is idempotent since it
- * clears the tag prefix first, but you still repeat all the embedding
- * work already done).
+ * re-runs.
  *
  * step.run only memoizes on successful completion — a step killed
- * mid-execution (not yet returned) is NOT memoized and retries from its
- * own top. Verified this the hard way: a real crash-mid-run test produced
- * duplicate rows specifically for the largest/slowest pages (the ones
- * statistically most likely to still be mid-insert-loop at kill time).
- * Fix: each page's chunk inserts run in a single transaction, so a step
- * killed partway through rolls back cleanly — retry starts from zero
- * rows for that page, not a partial set plus a full redo.
+ * mid-execution is NOT memoized and retries from its own top. That used to
+ * need a per-page DB transaction (a half-inserted page plus a full redo left
+ * duplicate rows). It no longer does: a page is now ONE upsert keyed by its
+ * URL, so a retried step overwrites the same item instead of adding one.
+ *
+ * The stale cleanup runs last, as its own step, and only after every page
+ * step has succeeded (a step that exhausts its retries fails the whole run
+ * first), with the same fail-closed rules as the CLI (crawl-pages.js).
  *
  * Trigger: send event "crawl/ingest.requested" with
  *   { datasetPath: "/abs/path/to/dataset.json", tagPrefix: "ircc-crawl" }
@@ -39,52 +33,24 @@ export const ingestCrawlDataset = inngest.createFunction(
       return Array.isArray(raw) ? raw : raw.items;
     });
 
-    await step.run("clear-existing-rows", async () => {
-      const { rowCount } = await pool.query(
-        "DELETE FROM docs WHERE metadata->>'source' LIKE $1",
-        [`${tagPrefix}-%`]
-      );
-      return { cleared: rowCount };
-    });
-
-    let totalChunks = 0;
+    const kept = [];
     let skippedPages = 0;
 
     for (let p = 0; p < items.length; p++) {
       const item = items[p];
       const result = await step.run(`ingest-page-${p}`, async () => {
-        const markdown = item.markdown ?? "";
-        if (markdown.trim().length < 100) return { skipped: true, chunks: 0 };
-
-        const chunks = chunkMarkdown(markdown);
-        const title = titleFor(item, markdown);
-        const source = `${tagPrefix}-${topicFor(item.url)}`;
-
-        const client = await pool.connect();
-        try {
-          await client.query("BEGIN");
-          for (let c = 0; c < chunks.length; c++) {
-            const content = chunks[c];
-            const metadata = { source, url: item.url, title, chunk: c };
-            await client.query(
-              "INSERT INTO docs (content, metadata, embedding) VALUES ($1, $2::jsonb, embed($1))",
-              [content, JSON.stringify(metadata)]
-            );
-          }
-          await client.query("COMMIT");
-        } catch (err) {
-          await client.query("ROLLBACK");
-          throw err;
-        } finally {
-          client.release();
-        }
-        return { skipped: false, chunks: chunks.length };
+        const upload = pageItem(item, tagPrefix);
+        if (!upload) return { skipped: true, key: null };
+        await upsertItem(upload);
+        return { skipped: false, key: upload.key };
       });
 
       if (result.skipped) skippedPages++;
-      else totalChunks += result.chunks;
+      else kept.push(result.key);
     }
 
-    return { totalPages: items.length, totalChunks, skippedPages };
+    const cleanup = await step.run("delete-stale-items", () => deleteStale(kept, { tagPrefix }));
+
+    return { totalPages: items.length, uploaded: kept.length, skippedPages, ...cleanup };
   }
 );

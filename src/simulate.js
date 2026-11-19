@@ -13,7 +13,7 @@ import { closeDb } from "./db.js";
 
 const threadId = "sim-thread-" + Date.now();
 const config = { configurable: { thread_id: threadId } };
-// Same RAGDB_URI-with-fallback shape as db.js and index.js — this was the one
+// Same RAGDB_URI-with-fallback shape as index.js's checkpointer — this was the one
 // entry point that hardcoded the URI, so simulating against a non-default
 // database silently checkpointed to the default one instead.
 const checkpointer = PostgresSaver.fromConnString(

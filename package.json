@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "WhatsApp bot that answers Canadian immigration questions grounded in official IRCC pages, via a local pgvector RAG store.",
+  "description": "WhatsApp bot that answers Canadian immigration questions grounded in official IRCC pages, via a Cloudflare AI Search RAG store.",
   "license": "MIT",
   "author": "Ismail Kattakath",
   "homepage": "https://github.com/kattakath/ircc-whatsapp-bot#readme",
@@ -18,7 +18,7 @@
     "whatsapp-bot",
     "langgraph",
     "rag",
-    "pgvector",
+    "cloudflare-ai-search",
     "crag",
     "ircc",
     "immigration",
@@ -35,6 +35,7 @@
   "scripts": {
     "start": "node src/index.js",
     "lint": "node scripts/lint.js",
+    "test": "node --test test/*.test.js",
     "test:pipeline": "node src/test-pipeline.js",
     "inngest:serve": "node scripts/inngest/serve.js"
   },

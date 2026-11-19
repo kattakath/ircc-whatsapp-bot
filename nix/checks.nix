@@ -5,7 +5,7 @@
 #   formatting          a tracked file is not formatted / lints dirty per the
 #                       `treefmt` block in flake.nix (nixfmt + deadnix + statix)
 #   toolchain-complete  a binary the dev shell promises no longer resolves
-#   project-gate        the repo's own `npm run lint` fails
+#   project-gate        the repo's own `npm run lint` or `npm test` fails
 #
 # They live here rather than in flake.nix because flake.nix in this repo is the
 # inputs + composition file; `perSystem` concerns get their own module under nix/,
@@ -77,6 +77,7 @@
           ../package-lock.json
           ../src
           ../scripts
+          ../test
         ];
       };
     in
@@ -130,11 +131,15 @@
         # and the vendored node_modules above is what lets the second half of that
         # run with no network.
         #
+        # `npm test` runs here too: node's built-in runner, no extra dependency, and
+        # every test mocks `fetch` — none reaches the live Cloudflare AI Search API.
+        #
         # Deliberately NOT `node src/test-pipeline.js` / `src/simulate.js`: those
-        # need an OpenAI key, a reachable pgvector database and live web search, none
+        # need an OpenAI key, the live AI Search instance and live web search, none
         # of which exist in a build sandbox. They stay human-run, per CONTRIBUTING.md.
-        # GOES RED WHEN: a .js file fails to parse, or imports a package that is not
-        # in package.json — the runtime-only failure CONTRIBUTING.md warns about.
+        # GOES RED WHEN: a .js file fails to parse, imports a package that is not in
+        # package.json (the runtime-only failure CONTRIBUTING.md warns about), or a
+        # unit test fails — e.g. the item-key port drifting from the export's.
         project-gate =
           pkgs.runCommandLocal "ircc-whatsapp-bot-project-gate"
             {
@@ -158,6 +163,7 @@
               ln -s ${nodeModules}/node_modules node_modules
               export HOME="$TMPDIR"
               npm run --silent lint
+              npm test
               touch "$out"
             '';
       };

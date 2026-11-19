@@ -1,5 +1,5 @@
 {
-  description = "WhatsApp bot answering Canadian immigration questions, grounded in official IRCC content via a local pgvector RAG store";
+  description = "WhatsApp bot answering Canadian immigration questions, grounded in official IRCC content via a Cloudflare AI Search RAG store";
 
   inputs = {
     flake-parts.url = "github:hercules-ci/flake-parts";
@@ -7,8 +7,10 @@
     treefmt-nix.url = "github:numtide/treefmt-nix";
     treefmt-nix.inputs.nixpkgs.follows = "nixpkgs";
 
-    # Optional local-RAG dependency (pgvector + Ollama, exposing an in-DB
-    # embed() SQL function) -- see nix/module.nix's `localRag.enable`. Always
+    # Optional local Postgres provider (nix-local-rag's pgvector + Ollama) --
+    # see nix/module.nix's `localRag.enable`. Retrieval moved to Cloudflare AI
+    # Search (2026-11-19); the bot now uses this Postgres only for its
+    # LangGraph checkpoints. Always
     # fetched (a flake input can't be conditional), but its module does
     # nothing unless that option turns it on, same "always import, gate by
     # .enable" idiom nixpkgs itself uses for `services.postgresql`.

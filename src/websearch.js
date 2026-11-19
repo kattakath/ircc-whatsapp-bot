@@ -75,55 +75,35 @@ export async function webFallback(question) {
     if (!page || page.text.length < 100) continue;
 
     chunks.push({
-      content: page.text.slice(0, 4000), // cap: this skips normal chunking, keep it bounded
+      content: page.text.slice(0, 4000), // cap: bounds the prompt and the persisted item
       metadata: {
         source: "ircc-live",
         url: result.link,
         title: page.title || result.title,
       },
       similarity: null, // not from vector search — grading already happened upstream
+      live: true, // fetched just now, not retrieved — llm.js labels its provenance from this
     });
   }
 
   return chunks;
 }
 
-const TARGET_CHUNK_CHARS = 800;
-
-function chunkText(text) {
-  const paragraphs = text.split(/\n{2,}/).map((p) => p.trim()).filter(Boolean);
-  const chunks = [];
-  let current = [];
-  let currentLen = 0;
-  for (const para of paragraphs) {
-    if (currentLen > 0 && currentLen + para.length > TARGET_CHUNK_CHARS) {
-      chunks.push(current.join("\n\n"));
-      current = [];
-      currentLen = 0;
-    }
-    current.push(para);
-    currentLen += para.length;
-  }
-  if (current.length) chunks.push(current.join("\n\n"));
-  return chunks.filter((c) => c.length >= 60);
-}
-
 /**
- * Self-learning step: persist web-fallback chunks into ragdb under
- * source="ircc-live", so a similar future question is answered from local
- * retrieval instead of triggering another live search. Best-effort — a
- * failure here shouldn't break the answer that already went out.
+ * Self-learning step: persist each web-fallback page into the AI Search store
+ * as ONE `ircc-live` item, so a similar future question is answered from
+ * retrieval instead of triggering another live search. One upload per page, not
+ * per paragraph: the item is keyed by its URL, so per-piece uploads would each
+ * overwrite the last — and the store chunks and embeds the page itself.
+ * Best-effort — a failure here shouldn't break the answer that already went out.
  */
 export async function persistWebFallback(chunks) {
   for (const chunk of chunks) {
     try {
-      for (const piece of chunkText(chunk.content)) {
-        await persistChunk(piece, {
-          source: "ircc-live",
-          url: chunk.metadata.url,
-          title: chunk.metadata.title,
-        });
-      }
+      await persistChunk(chunk.content, {
+        url: chunk.metadata.url,
+        title: chunk.metadata.title,
+      });
     } catch (err) {
       console.error(`Failed to persist web-fallback content for ${chunk.metadata.url}:`, err);
     }
