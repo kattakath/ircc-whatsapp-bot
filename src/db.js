@@ -12,9 +12,14 @@ export const LIVE_CORPUS = "ircc-live";
 // Applied to the VECTOR score (scoring_details.vector_score — cosine similarity
 // from the instance's embedding model). The instance is hybrid, and its top-level
 // `score` is a fused rank (RRF: the top hit always scores 1), not a similarity,
-// so it cannot carry this floor or graph.js's GRADE_THRESHOLD. Both numbers were
-// tuned on the old Ollama embeddings and want re-checking on this model.
-const SIMILARITY_FLOOR = 0.3;
+// so it cannot carry this floor or graph.js's GRADE_THRESHOLD.
+//
+// Re-tuned 2026-11-19 for AI Search's qwen3-embedding-0.6b (scripts/threshold-probe.mjs,
+// 24 covered questions, 175 chunks): no top-8 chunk of a covered question scored
+// below 0.40, so the old 0.3 dropped nothing. At 0.45 the floor drops 6 of 63
+// other-topic chunks and 2 of 112 relevant ones; it matters most when the live
+// fallback is empty and synthesis falls back to these local chunks.
+const SIMILARITY_FLOOR = 0.45;
 
 /** The `filters` object for a search, or the equality form when there is one value. */
 export function buildFilters(sources) {

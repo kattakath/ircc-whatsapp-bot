@@ -195,13 +195,22 @@ function looksLikeRealQuestion(text) {
 // similarity among the retrieved chunks — not chunks[0]'s, because the store
 // ranks by a hybrid fused score and its top hit can be keyword-only, with no
 // vector score at all — against a stricter threshold than db.js's own
-// SIMILARITY_FLOOR (0.3, which just filters noise). Both thresholds were set
-// on the old local embeddings and want re-checking on AI Search's model.
+// SIMILARITY_FLOOR (0.45, which just filters noise).
+//
+// 0.60, re-tuned 2026-11-19 on AI Search's qwen3-embedding-0.6b with
+// scripts/threshold-probe.mjs (44 synthetic questions): every covered question
+// whose best chunk was the right page scored >= 0.613 (18/18 kept), off-topic
+// questions topped out at 0.570 bar one outlier (0.637), and the two covered
+// questions that hit the WRONG page scored 0.554 and 0.450, so they now go live.
+// The old 0.5 let 5 of 14 off-topic questions through. 0.65 was rejected: it would
+// send 3 correctly covered questions (0.613-0.635) to a needless live search.
+// Weakest assumption: the probe is English and well-formed; real messages score
+// lower, which costs extra live searches rather than wrong answers.
 // Below GRADE_THRESHOLD, retrieval is treated as "incorrect" and discarded
 // in favor of a canada.ca-scoped live search, same as CRAG's incorrect branch. This trades grading
 // precision for zero extra latency (an LLM grading call would stack with
 // the already-slow synthesis call).
-const GRADE_THRESHOLD = 0.5;
+const GRADE_THRESHOLD = 0.6;
 
 async function answerFreeform(question, sources = null) {
   let chunks = await retrieve(question, { sources });

@@ -106,7 +106,7 @@ describe("retrieve", () => {
     assert.deepEqual(JSON.parse(calls[0].init.body), {
       query: "q",
       ai_search_options: {
-        retrieval: { max_num_results: 3, match_threshold: 0.3, filters: { source: "ircc-crawl-pr" } },
+        retrieval: { max_num_results: 3, match_threshold: 0.45, filters: { source: "ircc-crawl-pr" } },
       },
     });
   });
