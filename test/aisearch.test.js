@@ -49,6 +49,12 @@ describe("itemKey — must match the export's Python byte for byte", () => {
       "ircc/www.canada.ca_en_immigration-refugees-citizenship_services_immigrate-canada_express-entry_eligibility_criteri-8aa66d304a.md",
     ],
     [
+      // Truncated, and also the key of a live export item (checked 2026-11-19).
+      "ircc-live",
+      "https://www.canada.ca/en/immigration-refugees-citizenship/services/canadian-passports/help-centre/travel-information.html",
+      "ircc-live/www.canada.ca_en_immigration-refugees-citizenship_services_canadian-passports_help-centre_travel-informa-60f948fb5d.md",
+    ],
+    [
       "ircc-live",
       "https://www.canada.ca/en/immigration-refugees-citizenship/services/study-canada/study-permit.html",
       "ircc-live/www.canada.ca_en_immigration-refugees-citizenship_services_study-canada_study-permit.html-8af376dafd.md",
