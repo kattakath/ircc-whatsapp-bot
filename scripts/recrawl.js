@@ -43,12 +43,19 @@ const PINNED_PAGES = [
   "study-canada/work/work-on-campus.html",
   "study-canada/work/work-off-campus.html",
 ];
-const START_URLS = [...HUB_PAGES, ...PINNED_PAGES].map((p) => ({ url: SERVICES + p }));
+// Pinned pages OUTSIDE services/: each is a start URL AND its own exact include glob, so the
+// crawl fetches that one page without fanning out into the rest of the tree. 2026-11-20: the
+// bot told a visitor they could not work remotely for a foreign employer; IRCC's digital-nomad
+// instructions say they can (up to 6 months). The page was missing from the corpus.
+const PINNED_OUTSIDE = [
+  "https://www.canada.ca/en/immigration-refugees-citizenship/corporate/publications-manuals/operational-bulletins-manuals/service-delivery/digital-nomads.html",
+];
+const START_URLS = [...[...HUB_PAGES, ...PINNED_PAGES].map((p) => SERVICES + p), ...PINNED_OUTSIDE].map((url) => ({ url }));
 
 const INPUT = {
   startUrls: START_URLS,
   crawlerType: "playwright:adaptive",
-  includeUrlGlobs: [{ glob: "https://www.canada.ca/en/immigration-refugees-citizenship/services/**" }],
+  includeUrlGlobs: [{ glob: "https://www.canada.ca/en/immigration-refugees-citizenship/services/**" }, ...PINNED_OUTSIDE.map((glob) => ({ glob }))],
   excludeUrlGlobs: [{ glob: "https://www.canada.ca/en/immigration-refugees-citizenship/services/reference-include/**" }],
   maxCrawlDepth: 3,
   maxCrawlPages: 300,
