@@ -6,6 +6,7 @@ import { LOST_STATUS_RE, isHighStakes, rewrite, synthesize } from "./llm.js";
 import { isMoreRequest, layoutAnswer, nextChunk } from "./layout.js";
 import { clarificationFor, resolveClarification } from "./clarify.js";
 import { compoundQuestion, restNote, splitCompound } from "./compound.js";
+import { CATEGORY_PHRASE, PTIME_TOOL_URL, createLiveData, liveIntent } from "./livedata.js";
 import { webFallback, persistWebFallback } from "./websearch.js";
 import { renderAnswer } from "./render.js";
 import { SOURCES_NONE, classifyAct, isComplaintWithContent, isShortQuestion } from "./gate.js";
@@ -13,7 +14,7 @@ import { SOURCES_NONE, classifyAct, isComplaintWithContent, isShortQuestion } fr
 // Everything that leaves the process (retrieval, web fallback, the LLM). buildGraph(deps)
 // takes overrides so the offline dialogue harness (test/dialogue/) runs with stubs:
 // docs/conversation-design.md FIX-01.
-const DEFAULT_DEPS = { retrieve, topSimilarity, synthesize, webFallback, persistWebFallback, rewrite };
+const DEFAULT_DEPS = { retrieve, topSimilarity, synthesize, webFallback, persistWebFallback, rewrite, live: createLiveData() };
 
 // FIX-03: a transient failure (AI Search 500, a dropped connection) is retried once,
 // silently, at the node. A deadline (AbortError/TimeoutError) is NOT retried: the user has
@@ -496,6 +497,25 @@ function clarifyNode(state) {
     pendingClarify: c ? clarify : null,
   };
 }
+// FIX-20: processing times and Express Entry draws come from IRCC's live feeds, never from RAG
+// (the corpus holds no durations). A missing country is asked once and bound to the next message.
+const liveNode = (live) => async function liveNode(state) {
+  const text = state.incomingText ?? "";
+  const intent = liveIntent(text);
+  const intro = (msg) => (state.hasGreeted ? msg : `${INTRO_LINE}\n\n${msg}`);
+  if (intent?.kind === "ptime" && !(await live.hasCountry(intent.country))) {
+    return {
+      pendingMessage: intro("Which country are you applying from? IRCC's processing times differ by country."),
+      bareReply: true,
+      hasGreeted: true,
+      pendingClarify: { kind: "ptime", phrase: CATEGORY_PHRASE[intent.category] },
+    };
+  }
+  const reply = await live.answer(intent);
+  return { pendingMessage: intro(reply), hasGreeted: true, lastSources: intent?.kind === "ptime" ? [PTIME_TOOL_URL] : [] };
+};
+const routeFromClarifyAnswer = (state) => (liveIntent(state.incomingText ?? "") ? "live" : "quickAnswer");
+
 // The reply to a clarifying question becomes the question it stands for.
 function clarifyAnswerNode(state) {
   return { incomingText: resolveClarification(state.clarifyNow, state.incomingText ?? ""), clarifyNow: null };
@@ -774,6 +794,7 @@ function routeFromStart(state) {
   // there, which is a reasonable, honest response either way.
   if (/^\d$/.test(normalizeChoice(text))) return routeFromMenu(state);
   if (isMoreRequest(text)) return "more";
+  if (liveIntent(text)) return "live";
   if (clarificationFor(text)) return "clarify";
   if (classifyAct(text)) return "smallTalk";
   if (looksLikeRealQuestion(text)) return "quickAnswer";
@@ -792,6 +813,7 @@ function routeFromMenu(state) {
   if (choice === "2") return "settlePrompt";
   if (choice === "3") return "freeformPrompt";
   if (isMoreRequest(text)) return "more";
+  if (liveIntent(text)) return "live";
   if (clarificationFor(text)) return "clarify";
   if (classifyAct(text)) return "smallTalk";
   return "quickAnswer";
@@ -834,6 +856,7 @@ function routeFromRoot(state) {
   if (state.hasGreeted) return "entry";
   // A brand-new chat: answer a real opening question now (FIX-02); greet anything else.
   const text = state.incomingText ?? "";
+  if (liveIntent(text)) return "live"; // with the identity line
   if (clarificationFor(text)) return "clarify"; // with the identity line (S47)
   if (classifyAct(text)) return "smallTalk";
   return looksLikeRealQuestion(text) && !isResetCommand(text) ? "quickAnswer" : "greeting";
@@ -851,6 +874,7 @@ function buildGraph(overrides = {}) {
   .addNode("smallTalk", smallTalkNode)
   .addNode("more", moreNode)
   .addNode("clarify", clarifyNode)
+  .addNode("live", liveNode(allDeps.live))
   .addNode("clarifyAnswer", clarifyAnswerNode)
   .addNode("quickAnswer", quickAnswerNode(answerFreeform, allDeps.rewrite), { retryPolicy: retryPolicy ?? RAG_RETRY })
   .addNode("tempPrompt", tempPromptNode)
@@ -867,6 +891,7 @@ function buildGraph(overrides = {}) {
   .addNode("slotEdit", slotEditNode)
 
   .addConditionalEdges(START, routeFromRoot, {
+    live: "live",
     clarify: "clarify",
     greeting: "greeting",
     entry: "entry",
@@ -879,6 +904,7 @@ function buildGraph(overrides = {}) {
     smallTalk: "smallTalk",
     menu: "menu",
     more: "more",
+    live: "live",
     clarify: "clarify",
     reset: "reset",
     tempPrompt: "tempPrompt",
@@ -893,6 +919,7 @@ function buildGraph(overrides = {}) {
     quickAnswer: "quickAnswer",
     smallTalk: "smallTalk",
     more: "more",
+    live: "live",
     clarify: "clarify",
     clarifyAnswer: "clarifyAnswer",
   })
@@ -900,7 +927,8 @@ function buildGraph(overrides = {}) {
   .addEdge("smallTalk", "menu")
   .addEdge("more", "menu")
   .addEdge("clarify", "menu")
-  .addEdge("clarifyAnswer", "quickAnswer")
+  .addEdge("live", "menu")
+  .addConditionalEdges("clarifyAnswer", routeFromClarifyAnswer, { live: "live", quickAnswer: "quickAnswer" })
   .addEdge("quickAnswer", "menu")
 
   .addConditionalEdges("tempPrompt", routeFromTempPrompt, {

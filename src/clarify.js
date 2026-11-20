@@ -74,6 +74,11 @@ export function resolveClarification(clarify, reply) {
     const hit = Object.values(TOPICS[clarify.key]?.options ?? {}).find((o) => o.match.test(r));
     return hit && r.split(" ").length <= 4 ? hit.query : null;
   }
+  // FIX-20: "Which country are you applying from?" — the reply names it; phrase it so liveIntent matches.
+  if (clarify.kind === "ptime") {
+    if (r.split(" ").length > 5 || !clarify.phrase) return null;
+    return `How long is the ${clarify.phrase} processing time from ${reply.trim().replace(/[?.!]+$/, "")}?`;
+  }
   if (clarify.kind === "delay") {
     const what = clarify.program ? `my ${clarify.program} application` : "my application";
     if (/\b(2|what (to|can i|should i) do|too long|delay|delayed|help|late)\b/.test(r)) {
