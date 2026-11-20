@@ -2,7 +2,7 @@ import { parseControl } from "./control.js";
 import { StateGraph, Annotation, interrupt, Command, START, END } from "@langchain/langgraph";
 import { PostgresSaver } from "@langchain/langgraph-checkpoint-postgres";
 import { retrieve, topSimilarity } from "./db.js";
-import { isHighStakes, synthesize } from "./llm.js";
+import { LOST_STATUS_RE, isHighStakes, synthesize } from "./llm.js";
 import { isMoreRequest, layoutAnswer, nextChunk } from "./layout.js";
 import { webFallback, persistWebFallback } from "./websearch.js";
 import { renderAnswer } from "./render.js";
@@ -283,7 +283,7 @@ const GRADE_THRESHOLD = 0.6;
 // 2026-11-20). Lexical query expansion (a standard IR technique) adds the official terms to the
 // RETRIEVAL query only; the model still answers the user's own words. None of the 44 eval
 // questions match, so their retrieval is unchanged.
-const LOST_STATUS_RE = /\b(?:overstay(?:ed|ing)?|out of status|lost (?:my |our |his |her |their )?status|status (?:has |had |is |was )?(?:expired|ended|run out|ran out)|expired (?:status|visa|permit|study permit|work permit|visitor record)|(?:visa|permit|visitor record) (?:has |had |is |was )?(?:expired|ended))\b/i;
+// LOST_STATUS_RE lives in llm.js: the same wording is high stakes there (one pattern, two uses).
 const RESTORATION_TERMS = "restore status restoration 90 days";
 export function expandRetrievalQuery(question) {
   return LOST_STATUS_RE.test(question ?? "") ? `${question} ${RESTORATION_TERMS}` : question;
