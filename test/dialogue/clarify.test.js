@@ -39,7 +39,7 @@ test("S47: a delay story with no question gets the intro plus ONE clarifying que
 test("not a clarification: real questions and stories without a delay go to RAG as before", async () => {
   const h = makeHarness();
   await h.turn("hi");
-  for (const q of ["My study permit application is still processing, how long does it take?", "I applied for my study permit in July and got biometrics done", "Which permit do I need to work on campus?"]) {
+  for (const q of ["My study permit application is still processing, what does that mean?", "I applied for my study permit in July and got biometrics done", "Which permit do I need to work on campus?"]) {
     const before = h.calls.synthesize.length;
     await h.turn(q);
     assert.equal(h.calls.synthesize.length, before + 1, q);

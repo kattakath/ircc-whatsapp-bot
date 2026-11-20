@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { createLiveData } from "../../src/livedata.js";
 // Offline dialogue harness (docs/conversation-design.md FIX-01). Hard rules from §7:
 // - no network: globalThis.fetch throws on ANY host, so a missed stub fails loudly;
 // - fake credentials only, so aisearch.js never reaches the login Keychain and llm.js
@@ -20,8 +22,8 @@ const { handleTurn } = await import("../../src/turn.js");
 export const LIVE_DB_DEFAULT = "postgresql://mcp@127.0.0.1:5433/ragdb";
 
 /** Stub dependencies that record every call. `answer` decides the LLM text. */
-export function makeDeps({ answer = (q) => `Answer to: ${q}`, similarity = 0.9, chunks, web = [], rewrite = null } = {}) {
-  const calls = { retrieve: [], synthesize: [], webFallback: [], persist: [], rewrite: [] };
+export function makeDeps({ answer = (q) => `Answer to: ${q}`, similarity = 0.9, chunks, web = [], rewrite = null, liveFetch = null } = {}) {
+  const calls = { retrieve: [], synthesize: [], webFallback: [], persist: [], rewrite: [], live: [] };
   const deps = {
     retrieve: async (question, opts) => {
       calls.retrieve.push({ question, opts });
@@ -41,6 +43,17 @@ export function makeDeps({ answer = (q) => `Answer to: ${q}`, similarity = 0.9, 
     persistWebFallback: async (cs) => {
       calls.persist.push(cs);
     },
+    // FIX-20: live IRCC feeds, served from fixtures in the feeds' measured shape (never the network).
+    live: createLiveData({
+      logger: { error: () => {} },
+      fetch:
+        liveFetch ??
+        (async (url) => {
+          calls.live.push(url);
+          const f = /ptime/.test(url) ? "data-ptime-en.json" : /country/.test(url) ? "data-country-name-en.json" : "ee_rounds_123_en.json";
+          return { ok: true, status: 200, text: async () => readFileSync(new URL(`../fixtures/ircc-json/${f}`, import.meta.url), "utf8") };
+        }),
+    }),
     // FIX-16: the question-in-context rewrite (an LLM call in production).
     rewrite: async (question, previous) => {
       calls.rewrite.push({ question, previous });
