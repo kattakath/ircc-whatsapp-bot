@@ -141,9 +141,11 @@ async function start() {
 
   // Only ever called for a sender admit() already let through (see messages.upsert).
   // The turn itself lives in src/turn.js so the offline harness can drive it.
-  function processMessage(jid, inbound, sendOptions) {
+  function processMessage(jid, inbound, sendOptions, msg) {
     return handleTurn({
       jid,
+      message: msg,
+      newerInbound: () => latestInbound.get(jid) !== msg?.key?.id,
       text: inbound.text,
       preface: inbound.captioned ? CAPTION_PREFACE : null,
       sendOptions,
@@ -165,6 +167,9 @@ async function start() {
     return next;
   }
 
+  // FIX-10: the newest inbound message id per chat, so a reply can tell it has been overtaken.
+  const latestInbound = new Map();
+
   sock.ev.on("messages.upsert", async ({ messages, type }) => {
     if (type !== "notify") return;
 
@@ -178,6 +183,7 @@ async function start() {
       // answered would be noise), so they need no allowlist lookup either.
       const inbound = classifyInbound(msg.message);
       if (inbound.kind === "other") continue;
+      latestInbound.set(jid, msg.key.id);
 
       enqueue(jid, async () => {
         // Allowlist FIRST (FIX-40): nothing below may send, set presence or log
@@ -223,7 +229,7 @@ async function start() {
           return;
         }
 
-        await processMessage(jid, inbound, sendOptions);
+        await processMessage(jid, inbound, sendOptions, msg);
       });
     }
   });

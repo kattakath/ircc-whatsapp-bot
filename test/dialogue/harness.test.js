@@ -335,3 +335,48 @@ test("FIX-09 guard: real questions that LOOK like small talk still reach RAG", a
     assert.equal(h.calls.retrieve.length, 1, `"${q}" was swallowed by the gate`);
   }
 });
+
+// --- FIX-10: carry the message; quote only when adjacency breaks --------------------------
+
+test("FIX-10: an adjacent reply is not quoted (today's look)", async () => {
+  const h = makeHarness();
+  await h.turn("hi");
+  const msg = { key: { id: "IN1" }, message: { conversation: "What is a PGWP?" } };
+  const r = await h.turn("What is a PGWP?", { message: msg, newerInbound: () => false });
+  const reply = r.events.filter((e) => e.kind === "send").at(-1);
+  assert.equal(reply.options?.quoted, undefined);
+});
+
+test("FIX-10: a reply overtaken by a newer user message quotes the question it answers", async () => {
+  mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  try {
+    let release;
+    const gate = new Promise((r) => (release = r));
+    const h = makeHarness({ answer: async (q) => (await gate, `Answer to: ${q}`) });
+    await h.turn("hi");
+    const msg = { key: { id: "IN1" }, message: { conversation: "What is a PGWP?" } };
+    let newer = false;
+    const pending = h.turn("What is a PGWP?", { message: msg, newerInbound: () => newer });
+    await new Promise((r) => setImmediate(r));
+    mock.timers.tick(4000); // the filler goes out while the answer is still generating
+    await new Promise((r) => setImmediate(r));
+    newer = true; // the user sends another message before the answer is ready
+    release();
+    const r = await pending;
+    const sends = r.events.filter((e) => e.kind === "send");
+    assert.equal(sends[0].text, FILLER_TEXT);
+    assert.equal(sends[0].options?.quoted, undefined, "the filler is never quoted");
+    assert.equal(sends.at(-1).options?.quoted, msg, "the answer quotes its question");
+  } finally {
+    mock.timers.reset();
+  }
+});
+
+test("FIX-10: each sent prompt's id and time are recorded for choice binding (C15)", async () => {
+  const prompts = new Map();
+  const h = makeHarness();
+  await h.turn("hi", { prompts, now: () => 1234 });
+  const p = prompts.get(h.jid);
+  assert.match(p.id, /^BOT\d+$/);
+  assert.equal(p.sentAt, 1234);
+});

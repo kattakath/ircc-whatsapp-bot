@@ -57,8 +57,10 @@ export function makeHarness(depOpts = {}, { jid = "15550000001@s.whatsapp.net", 
   const failures = new Map(); // per-harness, so tests never share a saved failed question
   const outbox = [];
   const quiet = { log: () => {}, error: () => {} };
+  let sentSeq = 0;
   const send = async (to, content, options) => {
     outbox.push({ kind: "send", to, text: content.text, options });
+    return { key: { id: `BOT${++sentSeq}` } }; // like Baileys: the sent WAMessage
   };
   const presence = async (state, to) => {
     outbox.push({ kind: "presence", to, state });
