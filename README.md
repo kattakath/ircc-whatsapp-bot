@@ -242,14 +242,29 @@ Supported systems: `x86_64-linux`, `aarch64-linux`, `aarch64-darwin`
 
 See `nix/module.nix` for the full option surface (`package`, `stateDir`,
 `model`, `langsmithTracing`/`langsmithProject`, `aiSearch.accountId`/
-`aiSearch.instance`, `ragdbUri`, `localRag.enable`, `environmentFile`).
+`aiSearch.instance`, `ragdbUri`, `localRag.enable`, `environmentFile`,
+`keychainServices`).
 `aiSearch.accountId` is the Cloudflare account id (set it in the consuming
 flake, or put `CF_ACCOUNT_ID` in `environmentFile`). Secrets
 (`OPENAI_API_KEY`/`SERPER_API_KEY`/`LANGCHAIN_API_KEY`/
 `CLOUDFLARE_AI_SEARCH_TOKEN`) are never read from Nix: set `environmentFile`
-to a `KEY=value` file outside Nix (required on Linux), or on Darwin leave it
-unset to fall back to login-Keychain lookups (the AI Search token's item is
-`cf:cloudflare.com:ai-search`). Runs under `launchd` on
+to a `KEY=value` file outside Nix (required on Linux). On Darwin the login
+Keychain fills whatever that file leaves empty (the AI Search token's item is
+`cf:cloudflare.com:ai-search`). `keychainServices` maps an env var to a
+different Keychain item name, and can also supply `ALLOWED_NUMBERS` and
+`CF_ACCOUNT_ID`, so a **public** consuming flake carries no personal data:
+
+```nix
+services.irccWhatsappBot.keychainServices = {
+  SERPER_API_KEY = "serper.dev:api";
+  ALLOWED_NUMBERS = "ircc:whatsapp:allowed-numbers"; # comma-separated digits
+  CF_ACCOUNT_ID = "cf:cloudflare.com:account-id";
+};
+```
+
+The service refuses to start with an empty `ALLOWED_NUMBERS`: unset, the bot
+would answer anyone. Use `botOnly` on a host that already runs its own
+Postgres, and set `ragdbUri` there. Runs under `launchd` on
 Darwin, `systemd --user` on Linux (Linux path is real but untested — no
 Linux host runs this today).
 
