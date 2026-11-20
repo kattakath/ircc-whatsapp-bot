@@ -1,4 +1,6 @@
-node_modules/
+# No trailing slash: a symlinked node_modules (e.g. in a git worktree) must be ignored too;
+# `node_modules/` matches only directories and once let a symlink get committed.
+node_modules
 auth/
 *.log
 .env
