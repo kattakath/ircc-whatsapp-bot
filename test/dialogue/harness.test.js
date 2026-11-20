@@ -1,0 +1,125 @@
+// FIX-01: the offline dialogue harness itself — layers L1 (graph fixtures), L2 (transport,
+// outbound budget), L3 (oracle) and the L4 guard. Known defects are `todo` tests that state
+// the DESIRED behaviour: red on today's main, green once their fix lands (§7 "red-then-green").
+import { test, mock } from "node:test";
+import assert from "node:assert/strict";
+import { makeHarness, scratchPgUri, LIVE_DB_DEFAULT } from "./helpers.js";
+import { checkReply } from "./oracle.js";
+import { FILLER_TEXT, ERROR_TEXT } from "../../src/turn.js";
+
+// --- L4 guard -----------------------------------------------------------------------
+
+test("L4: scratchPgUri refuses unset, the live default, and RAGDB_URI", () => {
+  assert.throws(() => scratchPgUri({}), /not set/);
+  assert.throws(() => scratchPgUri({ IRCC_TEST_PG_URI: LIVE_DB_DEFAULT }), /live checkpoint/);
+  assert.throws(() => scratchPgUri({ IRCC_TEST_PG_URI: "postgresql://x/y", RAGDB_URI: "postgresql://x/y" }), /live checkpoint/);
+  assert.equal(scratchPgUri({ IRCC_TEST_PG_URI: "postgresql://localhost:5999/scratch" }), "postgresql://localhost:5999/scratch");
+});
+
+test("harness: network is forbidden", async () => {
+  await assert.rejects(() => fetch("https://example.com"), /network is forbidden/);
+});
+
+// --- L3 oracle --------------------------------------------------------------------
+
+test("L3: the oracle flags each formatting and grounding failure seen live", () => {
+  const live = "✅ **You cannot sponsor parents right now.**\n# Heading\n| a | b |\n1. step\nhttps://canadaca.ca/x";
+  const v = checkReply(live);
+  for (const needle of ["double-asterisk", "heading", "table", "bare 'N.'", "outside the allowlist"]) {
+    assert.ok(v.some((x) => x.includes(needle)), `expected a ${needle} violation in ${JSON.stringify(v)}`);
+  }
+  const ok = "✅ *Bold* is single asterisks.\n1) a step\nGeneral info only.\nhttps://www.canada.ca/en/immigration-refugees-citizenship/services/x.html";
+  assert.deepEqual(checkReply(ok, { requireDisclaimer: true }), []);
+  assert.ok(checkReply(ok, { retrievedUrls: [] }).some((x) => x.includes("not among the retrieved")));
+});
+
+// --- L1/L2: today's behaviour, pinned ---------------------------------------------------
+
+test("L2: a fast RAG turn = 1 presence + 1 reply, no filler, no error", async () => {
+  const h = makeHarness();
+  await h.turn("hi"); // a new chat greets first (today)
+  const r = await h.turn("How do I renew my PR card?");
+  assert.equal(r.events.filter((e) => e.kind === "presence").length, 1);
+  assert.equal(r.sends.length, 1);
+  assert.ok(!r.sends.includes(FILLER_TEXT));
+  assert.match(r.sends[0], /Answer to: How do I renew my PR card\?/);
+  assert.equal(h.calls.retrieve.length, 1);
+});
+
+test("L2: a slow turn sends the filler once, then the answer (2 sends)", async () => {
+  mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  try {
+    let release;
+    const gate = new Promise((r) => (release = r));
+    const h = makeHarness({ answer: async (q) => (await gate, `Answer to: ${q}`) });
+    await h.turn("hi");
+    const pending = h.turn("How do I renew my PR card?");
+    await new Promise((r) => setImmediate(r));
+    mock.timers.tick(4000);
+    await new Promise((r) => setImmediate(r));
+    release();
+    const r = await pending;
+    assert.equal(r.sends.length, 2);
+    assert.equal(r.sends[0], FILLER_TEXT);
+    assert.match(r.sends[1], /^Answer to: How do I renew my PR card\?/);
+  } finally {
+    mock.timers.reset();
+  }
+});
+
+test("L2: a failing turn sends exactly one error message (today's dead end)", async () => {
+  const h = makeHarness({ answer: async () => { throw new Error("LLM down"); } });
+  await h.turn("hi");
+  const r = await h.turn("How do I renew my PR card?");
+  assert.deepEqual(r.sends, [ERROR_TEXT]);
+  assert.ok(r.error);
+});
+
+test("L1: digits at the menu route to the topic prompts without RAG", async () => {
+  const h = makeHarness();
+  await h.turn("hi");
+  const r = await h.turn("1");
+  assert.match(r.sends[0], /Visit/);
+  assert.equal(h.calls.retrieve.length, 0);
+});
+
+// --- Known defects (desired behaviour; red until the named fix lands) --------------------
+
+test("FIX-02: the very first message is answered, not swallowed by the greeting", { todo: "FIX-02" }, async () => {
+  const h = makeHarness();
+  const r = await h.turn("How do I renew my PR card?");
+  assert.equal(h.calls.retrieve.length, 1);
+  assert.match(r.sends.at(-1), /Answer to: How do I renew my PR card\?/);
+});
+
+test("FIX-09: a bare 'thanks' does not trigger retrieval and the LLM", { todo: "FIX-09" }, async () => {
+  const h = makeHarness();
+  await h.turn("hi");
+  await h.turn("How do I renew my PR card?");
+  const before = h.calls.retrieve.length;
+  await h.turn("thanks a lot!!!");
+  assert.equal(h.calls.retrieve.length, before);
+});
+
+async function intoCitizenshipIntake(h) {
+  await h.turn("hi");
+  await h.turn("2"); // settle long-term
+  await h.turn("2"); // citizenship intake: first prompt is "PR status? yes or no"
+  await h.turn("yes"); // prStatus stored; now asks for days present
+}
+const slotsOf = async (h) => (await h.graph.getState({ configurable: { thread_id: h.jid } })).values.slots ?? {};
+
+test("FIX-08: 'about 2 or 3 years' is never stored as 23 days", { todo: "FIX-08" }, async () => {
+  const h = makeHarness();
+  await intoCitizenshipIntake(h);
+  await h.turn("2 or 3 years");
+  assert.notEqual((await slotsOf(h)).yearsPresent, 23);
+});
+
+test("FIX-08: 'start over' during intake clears the stored answers", { todo: "FIX-08" }, async () => {
+  const h = makeHarness();
+  await intoCitizenshipIntake(h);
+  assert.equal((await slotsOf(h)).prStatus, true, "precondition: an answer is stored");
+  await h.turn("start over");
+  assert.deepEqual(await slotsOf(h), {});
+});

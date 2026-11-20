@@ -35,7 +35,7 @@
   "scripts": {
     "start": "node src/index.js",
     "lint": "node scripts/lint.js",
-    "test": "node --test test/*.test.js",
+    "test": "node --test test/*.test.js test/dialogue/*.test.js",
     "test:pipeline": "node src/test-pipeline.js",
     "inngest:serve": "node scripts/inngest/serve.js"
   },
