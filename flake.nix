@@ -73,12 +73,22 @@
         # not expressible in `imports` itself, which is why this is a second
         # output rather than an option.
         homeManagerModules = {
-          default = {
-            imports = [
-              ./nix/module.nix
-              nix-local-rag.homeManagerModules.default
-            ];
-          };
+          default =
+            { config, lib, ... }:
+            let
+              cfg = config.services.irccWhatsappBot;
+            in
+            {
+              imports = [
+                ./nix/module.nix
+                nix-local-rag.homeManagerModules.default
+              ];
+              # Here, not in module.nix: only this output declares these options.
+              config = lib.mkIf (cfg.enable && cfg.localRag.enable) {
+                services.pgvectorLocal.enable = lib.mkDefault true;
+                services.ollamaLocal.enable = lib.mkDefault true;
+              };
+            };
           botOnly = ./nix/module.nix;
         };
       };

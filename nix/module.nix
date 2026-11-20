@@ -10,8 +10,11 @@
 # from Nix. Two supported sources:
 #   - `environmentFile`: a KEY=value file outside Nix (chmod 600), sourced at
 #     launch. Works on any platform; REQUIRED on Linux.
-#   - Darwin only, when `environmentFile` is unset: the login Keychain, read
-#     directly with `/usr/bin/security find-generic-password`.
+#   - Darwin only: the login Keychain, read directly with
+#     `/usr/bin/security find-generic-password`, for whatever `environmentFile`
+#     (if set) left empty. `keychainServices` renames items and can carry the
+#     per-operator ALLOWED_NUMBERS / CF_ACCOUNT_ID too, so a public consuming
+#     flake holds no personal data at all.
 #
 # The Cloudflare AI Search token (CLOUDFLARE_AI_SEARCH_TOKEN) follows the same
 # two sources, but its Keychain lookup lives in src/aisearch.js, not in the
@@ -41,25 +44,38 @@
 let
   cfg = config.services.irccWhatsappBot;
 
+  # env var -> Keychain service. The three secrets are always looked up, under
+  # their own names unless `keychainServices` maps them elsewhere.
+  keychainMap =
+    lib.genAttrs [
+      "OPENAI_API_KEY"
+      "SERPER_API_KEY"
+      "LANGCHAIN_API_KEY"
+    ] lib.id
+    // cfg.keychainServices;
+
+  fromKeychain = name: pkgs.stdenv.hostPlatform.isDarwin && cfg.keychainServices ? ${name};
+
   secretsPrelude =
-    if cfg.environmentFile != null then
-      ''
-        set -a
-        . ${lib.escapeShellArg cfg.environmentFile}
-        set +a
-      ''
-    else if pkgs.stdenv.hostPlatform.isDarwin then
-      ''
-        # A miss stays non-fatal (`|| true` under the runner's `set -eu`): the
-        # key exports empty, and the required-key check below is what fails.
-        # Values only ever move variable-to-variable — never echoed, never argv.
-        for __key in OPENAI_API_KEY SERPER_API_KEY LANGCHAIN_API_KEY; do
-          export "$__key=$(/usr/bin/security find-generic-password -a "$(id -un)" -s "$__key" -w 2>/dev/null || true)"
-        done
-        unset __key
-      ''
-    else
-      "";
+    lib.optionalString (cfg.environmentFile != null) ''
+      set -a
+      . ${lib.escapeShellArg cfg.environmentFile}
+      set +a
+    ''
+    # Darwin: the Keychain fills whatever the environmentFile (if any) left
+    # empty. A miss stays non-fatal (`|| true` under the runner's `set -eu`): the
+    # key stays empty, and the required-key checks below are what fail. Values
+    # only ever move variable-to-variable: never echoed, never argv.
+    + lib.optionalString pkgs.stdenv.hostPlatform.isDarwin (
+      lib.concatStrings (
+        lib.mapAttrsToList (env: service: ''
+          if [ -z "''${${env}:-}" ]; then
+            ${env}="$(/usr/bin/security find-generic-password -a "$(id -un)" -s ${lib.escapeShellArg service} -w 2>/dev/null || true)"
+            export ${env}
+          fi
+        '') keychainMap
+      )
+    );
 
   runner = pkgs.writeShellScriptBin "ircc-whatsapp-bot-run" ''
     set -eu
@@ -84,7 +100,14 @@ let
     export CF_AI_SEARCH_INSTANCE=${lib.escapeShellArg cfg.aiSearch.instance}
     export LANGCHAIN_TRACING_V2=${if cfg.langsmithTracing then "true" else "false"}
     export LANGCHAIN_PROJECT=${lib.escapeShellArg cfg.langsmithProject}
-    export ALLOWED_NUMBERS=${lib.escapeShellArg (lib.concatStringsSep "," cfg.allowedNumbers)}
+    ${lib.optionalString (cfg.allowedNumbers != [ ]) ''
+      export ALLOWED_NUMBERS=${lib.escapeShellArg (lib.concatStringsSep "," cfg.allowedNumbers)}
+    ''}
+    # Empty ALLOWED_NUMBERS makes the bot answer ANYONE, so a service never starts without it.
+    if [ -z "''${ALLOWED_NUMBERS:-}" ]; then
+      echo "ircc-whatsapp-bot: missing ALLOWED_NUMBERS -- set services.irccWhatsappBot.allowedNumbers, ALLOWED_NUMBERS in environmentFile, or on Darwin keychainServices.ALLOWED_NUMBERS" >&2
+      exit 1
+    fi
     export OPENAI_MODEL=${lib.escapeShellArg cfg.model}
     export RAGDB_URI=${lib.escapeShellArg cfg.ragdbUri}
     mkdir -p ${lib.escapeShellArg cfg.stateDir}
@@ -189,6 +212,23 @@ in
       '';
     };
 
+    keychainServices = lib.mkOption {
+      type = lib.types.attrsOf lib.types.str;
+      default = { };
+      example = {
+        SERPER_API_KEY = "serper.dev:api";
+        ALLOWED_NUMBERS = "ircc:whatsapp:allowed-numbers";
+        CF_ACCOUNT_ID = "cf:cloudflare.com:account-id";
+      };
+      description = ''
+        Darwin only: env var -> login-Keychain service name, read at launch.
+        OPENAI_API_KEY, SERPER_API_KEY and LANGCHAIN_API_KEY are always looked
+        up, under their own names unless mapped here. Add ALLOWED_NUMBERS and
+        CF_ACCOUNT_ID to keep those per-operator values out of Nix as well. A
+        value environmentFile already set wins over the Keychain.
+      '';
+    };
+
     environmentFile = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
       default = null;
@@ -206,11 +246,13 @@ in
   config = lib.mkIf cfg.enable {
     assertions = [
       {
-        assertion = cfg.allowedNumbers != [ ];
-        message = "services.irccWhatsappBot.allowedNumbers is empty -- the bot would refuse every sender.";
+        assertion =
+          cfg.allowedNumbers != [ ] || cfg.environmentFile != null || fromKeychain "ALLOWED_NUMBERS";
+        message = "services.irccWhatsappBot.allowedNumbers is empty and neither environmentFile nor keychainServices.ALLOWED_NUMBERS can provide it -- the bot would answer every sender.";
       }
       {
-        assertion = cfg.aiSearch.accountId != null || cfg.environmentFile != null;
+        assertion =
+          cfg.aiSearch.accountId != null || cfg.environmentFile != null || fromKeychain "CF_ACCOUNT_ID";
         message = "services.irccWhatsappBot.aiSearch.accountId is unset and there is no environmentFile to provide CF_ACCOUNT_ID -- retrieval needs the Cloudflare account id.";
       }
       {
@@ -219,8 +261,9 @@ in
       }
     ];
 
-    services.pgvectorLocal.enable = lib.mkIf cfg.localRag.enable (lib.mkDefault true);
-    services.ollamaLocal.enable = lib.mkIf cfg.localRag.enable (lib.mkDefault true);
+    # `localRag.enable` is acted on by the `default` output's wrapper (flake.nix),
+    # the only output that imports nix-local-rag: defining `services.pgvectorLocal`
+    # here broke `botOnly` with "option does not exist" (measured 2026-11-19).
 
     launchd.agents.ircc-whatsapp-bot = lib.mkIf pkgs.stdenv.hostPlatform.isDarwin {
       enable = true;
