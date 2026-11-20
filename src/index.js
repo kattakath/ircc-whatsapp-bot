@@ -6,6 +6,7 @@ import qrcode from "qrcode-terminal";
 import pino from "pino";
 import { builder, pendingPromptText } from "./graph.js";
 import { mediaReply } from "./media.js";
+import { ANSWERED_ABOVE, createDedupe, isDedupeCandidate } from "./dedupe.js";
 import { admit, classifyInbound, jidTag } from "./ingress.js";
 import { CAPTION_PREFACE, FILLER_TEXT, handleTurn } from "./turn.js";
 import { createHolder, createQueues, createSender } from "./outbox.js";
@@ -68,6 +69,7 @@ const enqueue = createQueues();
 const sender = createSender(holder, new Map(), console, { dropOnFlush: [FILLER_TEXT] });
 const latestInbound = new Map(); // FIX-10: newest inbound id per chat
 const mediaStreak = new Map(); // FIX-23: consecutive captionless media per chat, for tapering
+const dedupe = createDedupe(); // FIX-38: resends of the same free-text question
 const seen = createSeen(); // FIX-13: message ids already handled ("append" and "notify" can repeat one)
 
 const MAX_RECONNECT_ATTEMPTS = 3;
@@ -235,7 +237,24 @@ async function start() {
     }
     mediaStreak.delete(jid);
 
-    await processMessage(jid, inbound, sendOptions, msg, { offline });
+    // FIX-38: the same free-text question again within 10 min, already answered → one line
+    // quoting that answer instead of a second RAG turn. Never mid-intake (that is a slot answer).
+    let midIntake = false;
+    try {
+      midIntake = !!pendingPromptText((await graph.getState({ configurable: { thread_id: jid } })).values);
+    } catch {
+      /* no state yet */
+    }
+    const dedupeKey = !midIntake && isDedupeCandidate(inbound.text) ? dedupe.keyOf(jid, inbound.text) : null;
+    const earlier = dedupeKey && dedupe.answered(dedupeKey);
+    if (earlier?.status === "answered") {
+      console.log(`[dedupe] #${jidTag(jid)} resent an answered question`);
+      await sender.send(jid, { text: ANSWERED_ABOVE }, earlier.sent ? { ...sendOptions, quoted: earlier.sent } : sendOptions);
+      return;
+    }
+    if (dedupeKey) dedupe.start(dedupeKey);
+    const result = await processMessage(jid, inbound, sendOptions, msg, { offline });
+    if (dedupeKey) (result?.reply ? dedupe.finish(dedupeKey, result.sent) : dedupe.fail(dedupeKey));
   }
 
   // FIX-13: one note for an offline backlog older than the window, quoting its newest message.
@@ -262,6 +281,11 @@ async function start() {
     if (type === "notify") {
       for (const { msg, inbound } of fresh) {
         const jid = msg.key.remoteJid;
+        // FIX-38: a resend while the same question is still being answered is absorbed silently.
+        if (inbound.kind === "text" && isDedupeCandidate(inbound.text) && dedupe.status(dedupe.keyOf(jid, inbound.text)) === "inflight") {
+          console.log(`[dedupe] #${jidTag(jid)} resend absorbed while in flight`);
+          continue;
+        }
         latestInbound.set(jid, msg.key.id);
         enqueue(jid, () => handleInbound(msg, inbound));
       }

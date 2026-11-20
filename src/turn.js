@@ -111,7 +111,7 @@ export async function handleTurn({ jid, text, graph, send, presence, preface = n
     const replyOptions = message && newerInbound() ? { ...sendOptions, quoted: message } : sendOptions;
     const sent = await send(jid, { text: reply }, replyOptions);
     if (sent?.key?.id) prompts.set(jid, { id: sent.key.id, sentAt: now() });
-    return { reply };
+    return { reply, sent };
   } catch (err) {
     logger.error("Error handling message:", err);
     // Atomic turn (FIX-03): a failed run leaves its input as a pending write on the head, so the
