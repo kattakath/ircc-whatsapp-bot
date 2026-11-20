@@ -104,6 +104,7 @@ const TOPIC_BRANCHES = {
 const PR_SLOTS = [
   {
     key: "age",
+    label: "age",
     hint: "Just the number, like 34.",
     prompt: "How old are you? (just the number)",
     parse: (t) => {
@@ -114,6 +115,7 @@ const PR_SLOTS = [
   },
   {
     key: "education",
+    label: "education",
     hint: "Just the number from the list, 1 to 7.",
     prompt:
       "What's your highest level of education?\n" +
@@ -140,6 +142,7 @@ const PR_SLOTS = [
   },
   {
     key: "language",
+    label: "English or French level",
     hint: "Just the number from the list, 1 to 4.",
     prompt:
       "How would you rate your English or French?\n" +
@@ -160,6 +163,7 @@ const PR_SLOTS = [
   },
   {
     key: "workYears",
+    label: "skilled work experience",
     hint: "Just the number from the list, 1 to 4.",
     prompt:
       "How many years of skilled work experience do you have?\n" +
@@ -175,6 +179,7 @@ const PR_SLOTS = [
   },
   {
     key: "canadianExperience",
+    label: "worked in Canada",
     hint: "Just yes or no.",
     prompt: "Have you ever worked inside Canada? Reply yes or no.",
     parse: parseYesNo,
@@ -182,6 +187,7 @@ const PR_SLOTS = [
   },
   {
     key: "jobOfferOrPN",
+    label: "job offer or provincial nomination",
     hint: "Just yes or no.",
     prompt:
       "Do you have a valid job offer from a Canadian employer, or a provincial nomination? Reply yes or no.",
@@ -193,6 +199,7 @@ const PR_SLOTS = [
 const CITIZENSHIP_SLOTS = [
   {
     key: "prStatus",
+    label: "PR status",
     hint: "Just yes or no.",
     prompt: "Do you currently have valid Canadian permanent resident (PR) status? Reply yes or no.",
     parse: parseYesNo,
@@ -200,6 +207,7 @@ const CITIZENSHIP_SLOTS = [
   },
   {
     key: "yearsPresent",
+    label: "days in Canada (last 5 years)",
     hint: "Just the number of days, like 900, or say *not sure*.",
     prompt:
       "How many days have you been physically present in Canada in the last 5 years? " +
@@ -210,6 +218,7 @@ const CITIZENSHIP_SLOTS = [
   },
   {
     key: "taxYears",
+    label: "years of taxes filed (last 5)",
     hint: "Just a number from 0 to 5.",
     prompt: "In how many of the last 5 years did you file Canadian income taxes? (0-5)",
     parse: (t) => {
@@ -220,6 +229,7 @@ const CITIZENSHIP_SLOTS = [
   },
   {
     key: "age",
+    label: "age",
     hint: "Just the number, like 34.",
     prompt: "How old are you? (just the number)",
     parse: (t) => {
@@ -326,6 +336,8 @@ const State = Annotation.Root({
   // intake turn answered a side question and now waits for "continue or stop?" (S29).
   noMatch: Annotation({ default: () => 0 }),
   awaitingContinue: Annotation({ default: () => false }),
+  // FIX-15b: which recap item is being changed (0-based), or null.
+  editingSlot: Annotation({ default: () => null }),
 });
 
 // No yes/no framing ("...do you?") — a closed question invites a
@@ -361,6 +373,7 @@ function resetNode(state) {
     lastSources: [],
     noMatch: 0,
     awaitingContinue: false,
+    editingSlot: null,
     bareReply: false,
   };
 }
@@ -468,6 +481,72 @@ const STOP_WORDS = new Set(["stop", "end", "quit", "exit", "enough", "stop it"])
 const AMBIGUOUS_NO = new Set(["no", "n", "nope", "nah", "nahi", "not now"]);
 const lastWords = (t) => t.trim().toLowerCase().replace(/[.!?,]+$/, "").replace(/\s+/g, " ");
 
+// FIX-15b (C15, S20/S26): a repair marker plus a value re-binds the LAST answered slot
+// ("sorry 30", "wait I am actually 34 not 32"). The marker words and the replaced value are
+// stripped and the remainder must parse whole, so "sorry, no idea what this means" at a yes/no
+// slot is not read as "no". Precedent: Rasa's correction pattern; the word list is a judgement call.
+const CORRECTION_RE = /^(?:sorry|oops|wait|actually|correction|my bad|i meant|i mean|no,? i meant)\b|\b(?:actually|i meant|not \d+)\b/i;
+function parseCorrection(text, state, slotDefs) {
+  if (!state.slotIndex || !CORRECTION_RE.test(text)) return null;
+  const slot = slotDefs[state.slotIndex - 1];
+  const old = state.slots?.[slot.key];
+  const rest = text
+    .toLowerCase()
+    .replace(/\bnot\s+\S+/g, " ")
+    .replace(/\b(?:sorry|oops|wait|actually|correction|my bad|i meant|i mean|no,? i meant|i am|i'm|im|it is|it's|its|i have|i've)\b/g, " ")
+    .replace(/[,.!?;:]+/g, " ")
+    .trim()
+    .replace(/\s+/g, " ");
+  for (const c of [rest, ...(rest.match(/\d+/g) ?? [])]) {
+    const v = c ? slot.parse(c) : null;
+    if (v !== null && typeof v !== "object" && v !== old) return { slot, value: v };
+  }
+  return null;
+}
+
+// FIX-15b (S26): a numbered recap before the intake summary; OK goes on, a number changes one answer.
+const capitalize = (t) => t.charAt(0).toUpperCase() + t.slice(1);
+function recapText(state) {
+  const slotDefs = BRANCH_SLOTS[state.branch];
+  const lines = slotDefs.map((s, i) => `${i + 1}) ${capitalize(s.label)}: ${state.slots?.[s.key]}`);
+  return `Here's what I have:\n${lines.join("\n")}\n\nReply *OK*, or the item number to change it.`;
+}
+function editQuestion(slot) {
+  if (slot.parse === parseYesNo) return slot.prompt;
+  const options = slot.prompt.includes("\n") ? `\n${slot.prompt.split("\n").slice(1).join("\n")}` : "";
+  return `What should your ${slot.label} be?${options}`;
+}
+
+function slotRecapNode(state) {
+  const recap = recapText(state);
+  const text = interrupt(state.pendingMessage ? `${state.pendingMessage}\n\n${recap}` : recap);
+  return { incomingText: text, pendingMessage: null };
+}
+function routeFromRecap(state) {
+  const text = (state.incomingText ?? "").trim();
+  if (isResetCommand(text, { atIntake: true })) return "reset";
+  if (parseYesNo(text) === "yes") return "slotSynthesis";
+  const n = Number(normalizeChoice(text));
+  if (Number.isInteger(n) && n >= 1 && n <= BRANCH_SLOTS[state.branch].length) return "slotEdit";
+  return "slotRecap";
+}
+function slotEditNode(state) {
+  const slotDefs = BRANCH_SLOTS[state.branch];
+  const i = state.editingSlot ?? Number(normalizeChoice(state.incomingText ?? "")) - 1;
+  const slot = slotDefs[i];
+  const question = editQuestion(slot);
+  const text = interrupt(state.pendingMessage ? `${state.pendingMessage}\n\n${question}` : question);
+  if (isResetCommand(text, { atIntake: true })) return { incomingText: text, editingSlot: null, pendingMessage: null };
+  const parsed = slot.parse(text);
+  if (parsed && typeof parsed === "object" && parsed.reprompt) return { editingSlot: i, pendingMessage: parsed.reprompt, incomingText: "" };
+  if (parsed === null) return { editingSlot: i, pendingMessage: "Sorry, I didn't quite catch that.", incomingText: "" };
+  return { slots: { [slot.key]: parsed }, editingSlot: null, pendingMessage: null, incomingText: "" };
+}
+function routeFromSlotEdit(state) {
+  if (isResetCommand(state.incomingText ?? "", { atIntake: true })) return "reset";
+  return state.editingSlot !== null ? "slotEdit" : "slotRecap";
+}
+
 const slotFillNode = (answerFreeform) => async function slotFillNode(state) {
   const slotDefs = BRANCH_SLOTS[state.branch];
   const currentSlot = slotDefs[state.slotIndex];
@@ -499,6 +578,8 @@ const slotFillNode = (answerFreeform) => async function slotFillNode(state) {
     return { ...base, pendingMessage: parsed.reprompt };
   }
   if (parsed === null) {
+    const fix = parseCorrection(text, state, slotDefs);
+    if (fix) return { ...base, noMatch: 0, slots: { [fix.slot.key]: fix.value }, pendingMessage: `Updated: ${fix.slot.label} ${fix.value}.` };
     if (looksLikeRealQuestion(text) && !/^[0-9]+$/.test(text.trim())) {
       const { text: answer, sources: lastSources } = await answerFreeform(text);
       return {
@@ -588,7 +669,7 @@ function routeFromSettlePrompt(state) {
 function routeFromSlotFill(state) {
   const text = (state.incomingText ?? "").trim();
   if (isResetCommand(text, { atIntake: true })) return "reset";
-  if (state.slotIndex >= BRANCH_SLOTS[state.branch].length) return "slotSynthesis";
+  if (state.slotIndex >= BRANCH_SLOTS[state.branch].length) return "slotRecap";
   return "slotFill";
 }
 
@@ -630,6 +711,8 @@ function buildGraph(overrides = {}) {
   .addNode("setSlotBranch", setSlotBranchNode)
   .addNode("slotFill", slotFillNode(answerFreeform), { retryPolicy: retryPolicy ?? RAG_RETRY })
   .addNode("slotSynthesis", slotSynthesisNode(answerFreeform), { retryPolicy: retryPolicy ?? RAG_RETRY })
+  .addNode("slotRecap", slotRecapNode)
+  .addNode("slotEdit", slotEditNode)
 
   .addConditionalEdges(START, routeFromRoot, {
     greeting: "greeting",
@@ -683,8 +766,15 @@ function buildGraph(overrides = {}) {
   .addConditionalEdges("slotFill", routeFromSlotFill, {
     reset: "reset",
     slotFill: "slotFill",
-    slotSynthesis: "slotSynthesis",
+    slotRecap: "slotRecap",
   })
+  .addConditionalEdges("slotRecap", routeFromRecap, {
+    reset: "reset",
+    slotSynthesis: "slotSynthesis",
+    slotEdit: "slotEdit",
+    slotRecap: "slotRecap",
+  })
+  .addConditionalEdges("slotEdit", routeFromSlotEdit, { reset: "reset", slotEdit: "slotEdit", slotRecap: "slotRecap" })
   .addEdge("slotSynthesis", "menu");
 }
 
