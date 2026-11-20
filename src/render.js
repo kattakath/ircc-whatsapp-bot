@@ -161,12 +161,13 @@ export function renderAnswer(markdown, chunks = []) {
   // [n] markers only pick the sources (above); the reader never sees them. A marker the model put
   // on its own line ("[2]") would otherwise leave a stray line (seen live on gpt-oss:20b).
   const tidy = body
-    .replace(/[ \t]*\[\d{1,2}\](?:[ \t]*\[\d{1,2}\])*/g, "")
+    // gpt-oss also puts no-break spaces (U+00A0, U+202F) around markers: "intake\u00a0【1】." (seen live).
+    .replace(/[ \t\u00a0\u202f]*\[\d{1,2}\](?:[ \t\u00a0\u202f]*\[\d{1,2}\])*/g, "")
     // After the strip, not before: "no fee [3] ." must become "no fee." (seen live).
-    .replace(/[ \t]+([.,;:!?])(?=\s|$)/g, "$1")
-    .replace(/[ \t]+$/gm, "")
+    .replace(/[ \t\u00a0\u202f]+([.,;:!?])(?=\s|$)/g, "$1")
+    .replace(/[ \t\u00a0\u202f]+$/gm, "")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
   const text = sources.length ? `${tidy}\n\n${sources.map((u) => `🔗 ${u}`).join("\n")}` : tidy;
-  return { text, sources, dropped, zeroMarkers };
+  return { text, body: tidy, sources, dropped, zeroMarkers };
 }

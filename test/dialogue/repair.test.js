@@ -81,6 +81,7 @@ test("S29: a side question mid-intake is answered, then 'continue or stop?'; con
   const r = await h.turn("How do I sponsor my mother?");
   assert.match(r.sends.at(-1), /Answer to: How do I sponsor my mother\?/);
   assert.match(r.sends.at(-1), /Continue the PR check \(1 of 6 done\), or stop\?/);
+  assert.match(r.sends.at(-1), /^⏸️ PR check paused/, "the paused state leads (FIX-18)");
   assert.doesNotMatch(r.sends.at(-1), /highest level of education/, "the slot prompt waits for 'continue'");
   const c = await h.turn("continue");
   assert.match(c.sends.at(-1), /highest level of education/);
