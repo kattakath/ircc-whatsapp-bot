@@ -6,7 +6,7 @@ import qrcode from "qrcode-terminal";
 import pino from "pino";
 import { builder } from "./graph.js";
 import { admit, classifyInbound, jidTag } from "./ingress.js";
-import { handleTurn } from "./turn.js";
+import { CAPTION_PREFACE, handleTurn } from "./turn.js";
 
 // One checkpointer/compiled graph shared across the whole process — on the
 // local Postgres at RAGDB_URI (retrieval itself is Cloudflare AI Search, see
@@ -140,12 +140,14 @@ async function start() {
 
   // Only ever called for a sender admit() already let through (see messages.upsert).
   // The turn itself lives in src/turn.js so the offline harness can drive it.
-  function processMessage(jid, text) {
+  function processMessage(jid, inbound, sendOptions) {
     return handleTurn({
       jid,
-      text,
+      text: inbound.text,
+      preface: inbound.captioned ? CAPTION_PREFACE : null,
+      sendOptions,
       graph,
-      send: (to, content) => sock.sendMessage(to, content),
+      send: (to, content, options) => sock.sendMessage(to, content, options),
       presence: (state, to) => sock.sendPresenceUpdate(state, to),
     });
   }
@@ -191,20 +193,23 @@ async function start() {
           return;
         }
 
+        // Reply inside the same disappearing-message timer the user chose (FIX-05).
+        const sendOptions = inbound.ephemeralExpiration ? { ephemeralExpiration: inbound.ephemeralExpiration } : undefined;
+
         if (inbound.kind === "media") {
           // Silence would look exactly like a broken bot: nudge an admitted
           // sender who sent a photo/voice note/document with no caption.
           try {
             await sock.sendMessage(jid, {
               text: "I can only read text messages right now — could you type your question instead?",
-            });
+            }, sendOptions);
           } catch (err) {
             console.error("Failed to send media-nudge reply:", err);
           }
           return;
         }
 
-        await processMessage(jid, inbound.text);
+        await processMessage(jid, inbound, sendOptions);
       });
     }
   });

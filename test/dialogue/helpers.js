@@ -55,15 +55,15 @@ export function makeHarness(depOpts = {}, { jid = "15550000001@s.whatsapp.net", 
   const graph = buildGraph(deps).compile({ checkpointer: new MemorySaver() });
   const outbox = [];
   const quiet = { log: () => {}, error: () => {} };
-  const send = async (to, content) => {
-    outbox.push({ kind: "send", to, text: content.text });
+  const send = async (to, content, options) => {
+    outbox.push({ kind: "send", to, text: content.text, options });
   };
   const presence = async (state, to) => {
     outbox.push({ kind: "presence", to, state });
   };
-  async function turn(text) {
+  async function turn(text, extra = {}) {
     const before = outbox.length;
-    const result = await handleTurn({ jid, text, graph, send, presence, logger: quiet, ...(now ? { now } : {}) });
+    const result = await handleTurn({ jid, text, graph, send, presence, logger: quiet, ...(now ? { now } : {}), ...extra });
     const events = outbox.slice(before);
     return { ...result, events, sends: events.filter((e) => e.kind === "send").map((e) => e.text) };
   }

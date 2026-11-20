@@ -5,7 +5,7 @@ import { test, mock } from "node:test";
 import assert from "node:assert/strict";
 import { makeHarness, scratchPgUri, LIVE_DB_DEFAULT } from "./helpers.js";
 import { checkReply } from "./oracle.js";
-import { FILLER_TEXT, ERROR_TEXT } from "../../src/turn.js";
+import { FILLER_TEXT, ERROR_TEXT, CAPTION_PREFACE } from "../../src/turn.js";
 
 // --- L4 guard -----------------------------------------------------------------------
 
@@ -122,4 +122,16 @@ test("FIX-08: 'start over' during intake clears the stored answers", { todo: "FI
   assert.equal((await slotsOf(h)).prStatus, true, "precondition: an answer is stored");
   await h.turn("start over");
   assert.deepEqual(await slotsOf(h), {});
+});
+
+// --- FIX-05: caption preface and disappearing-message timer on every send --------------
+
+test("S10/S09: a captioned turn is prefaced, and every send carries the chat timer", async () => {
+  const h = makeHarness();
+  await h.turn("hi");
+  const opts = { ephemeralExpiration: 86400 };
+  const r = await h.turn("what does this biometrics letter mean?", { preface: CAPTION_PREFACE, sendOptions: opts });
+  assert.equal(r.sends.length, 1);
+  assert.ok(r.sends[0].startsWith(CAPTION_PREFACE + "\n\n"));
+  assert.ok(r.events.filter((e) => e.kind === "send").every((e) => e.options === opts));
 });
