@@ -8,6 +8,7 @@ import { builder } from "./graph.js";
 import { admit, classifyInbound, jidTag } from "./ingress.js";
 import { CAPTION_PREFACE, FILLER_TEXT, handleTurn } from "./turn.js";
 import { createHolder, createQueues, createSender } from "./outbox.js";
+import { OFFLINE_NOTE, OFFLINE_PREFACE, acceptInbound, createSeen, planBacklog } from "./offline.js";
 import { findSensitive, sensitiveReply } from "./redact.js";
 
 // One checkpointer/compiled graph shared across the whole process — on the
@@ -65,6 +66,7 @@ const holder = createHolder();
 const enqueue = createQueues();
 const sender = createSender(holder, new Map(), console, { dropOnFlush: [FILLER_TEXT] });
 const latestInbound = new Map(); // FIX-10: newest inbound id per chat
+const seen = createSeen(); // FIX-13: message ids already handled ("append" and "notify" can repeat one)
 
 const MAX_RECONNECT_ATTEMPTS = 3;
 let reconnectAttempts = 0;
@@ -157,13 +159,15 @@ async function start() {
 
   // Only ever called for a sender admit() already let through (see messages.upsert).
   // The turn itself lives in src/turn.js so the offline harness can drive it.
-  function processMessage(jid, inbound, sendOptions, msg) {
+  function processMessage(jid, inbound, sendOptions, msg, { offline = false } = {}) {
+    const preface = [offline ? OFFLINE_PREFACE : null, inbound.captioned ? CAPTION_PREFACE : null].filter(Boolean).join("\n");
     return handleTurn({
       jid,
       message: msg,
-      newerInbound: () => latestInbound.get(jid) !== msg?.key?.id,
+      // A late answer always quotes the message it answers (S23).
+      newerInbound: () => offline || latestInbound.get(jid) !== msg?.key?.id,
       text: inbound.text,
-      preface: inbound.captioned ? CAPTION_PREFACE : null,
+      preface: preface || null,
       sendOptions,
       graph,
       send: sender.send,
@@ -174,67 +178,99 @@ async function start() {
   // Messages are serialised per sender (a burst answered concurrently reads as broken); senders
   // run in parallel. The queues live at module scope (FIX-21: createQueues) to survive reconnects.
 
+  // Everything an inbound message may trigger, for live and offline messages alike. Runs inside
+  // the per-chat queue; the allowlist gate (FIX-40) comes first on BOTH paths.
+  async function handleInbound(msg, inbound, { offline = false } = {}) {
+    const jid = msg.key.remoteJid;
+    // Allowlist FIRST (FIX-40): nothing below may send, set presence or log
+    // message text for a sender who is not admitted.
+    const gate = await admit((j) => allowState(sock, j), jid);
+    if (!gate.admit) {
+      if (gate.reason === "not-allowlisted") {
+        console.log(`[ignored] non-allowlisted sender #${jidTag(jid)}`);
+      } else {
+        // check-failed or lid-unresolved: possibly an allowlisted relative
+        // being dropped, so this is the operator's alert line. No text.
+        console.error(`[alert] ingress ${gate.reason} for #${jidTag(jid)}${gate.error ? `: ${gate.error.message}` : ""}`);
+      }
+      return;
+    }
+
+    // Reply inside the same disappearing-message timer the user chose (FIX-05).
+    const sendOptions = inbound.ephemeralExpiration ? { ephemeralExpiration: inbound.ephemeralExpiration } : undefined;
+
+    // FIX-07: an ID number (UCI, SIN, application, passport) is never processed: no graph
+    // run, no checkpoint, no search query, no log of the text. One instant, canned reply (S12).
+    const sensitive = inbound.kind === "text" ? findSensitive(inbound.text) : [];
+    if (sensitive.length) {
+      console.log(`[redacted] #${jidTag(jid)} sent ${sensitive.join(", ")}; not processed`);
+      try {
+        await sender.send(jid, { text: sensitiveReply(sensitive) }, sendOptions);
+      } catch (err) {
+        console.error("Failed to send the ID-number reply:", err);
+      }
+      return;
+    }
+
+    if (inbound.kind === "media") {
+      // Silence would look exactly like a broken bot: nudge an admitted
+      // sender who sent a photo/voice note/document with no caption.
+      try {
+        await sender.send(jid, {
+          text: "I can only read text messages right now — could you type your question instead?",
+        }, sendOptions);
+      } catch (err) {
+        console.error("Failed to send media-nudge reply:", err);
+      }
+      return;
+    }
+
+    await processMessage(jid, inbound, sendOptions, msg, { offline });
+  }
+
+  // FIX-13: one note for an offline backlog older than the window, quoting its newest message.
+  async function sendOfflineNote(msg) {
+    const jid = msg.key.remoteJid;
+    const gate = await admit((j) => allowState(sock, j), jid);
+    if (!gate.admit) return;
+    await sender.send(jid, { text: OFFLINE_NOTE }, { quoted: msg });
+  }
+
   sock.ev.on("messages.upsert", async ({ messages, type }) => {
-    if (type !== "notify") return;
+    if (type !== "notify" && type !== "append") return;
 
+    const fresh = [];
     for (const msg of messages) {
-      if (!msg.message || msg.key.fromMe) continue;
-
-      const jid = msg.key.remoteJid;
-      if (!jid || jid.endsWith("@g.us") || jid === "status@broadcast") continue;
-
-      // Reactions, protocol messages and the like never earn a reply (a 👍
-      // answered would be noise), so they need no allowlist lookup either.
+      if (!acceptInbound(msg) || seen.has(msg.key.id)) continue;
+      seen.add(msg.key.id);
+      // Reactions, protocol messages and the like never earn a reply (a 👍 answered would be noise).
       const inbound = classifyInbound(msg.message);
       if (inbound.kind === "other") continue;
-      latestInbound.set(jid, msg.key.id);
+      fresh.push({ msg, inbound });
+    }
 
-      enqueue(jid, async () => {
-        // Allowlist FIRST (FIX-40): nothing below may send, set presence or log
-        // message text for a sender who is not admitted.
-        const gate = await admit((j) => allowState(sock, j), jid);
-        if (!gate.admit) {
-          if (gate.reason === "not-allowlisted") {
-            console.log(`[ignored] non-allowlisted sender #${jidTag(jid)}`);
-          } else {
-            // check-failed or lid-unresolved: possibly an allowlisted relative
-            // being dropped, so this is the operator's alert line. No text.
-            console.error(`[alert] ingress ${gate.reason} for #${jidTag(jid)}${gate.error ? `: ${gate.error.message}` : ""}`);
-          }
-          return;
-        }
+    if (type === "notify") {
+      for (const { msg, inbound } of fresh) {
+        const jid = msg.key.remoteJid;
+        latestInbound.set(jid, msg.key.id);
+        enqueue(jid, () => handleInbound(msg, inbound));
+      }
+      return;
+    }
 
-        // Reply inside the same disappearing-message timer the user chose (FIX-05).
-        const sendOptions = inbound.ephemeralExpiration ? { ephemeralExpiration: inbound.ephemeralExpiration } : undefined;
-
-        // FIX-07: an ID number (UCI, SIN, application, passport) is never processed: no graph
-        // run, no checkpoint, no search query, no log of the text. One instant, canned reply (S12).
-        const sensitive = inbound.kind === "text" ? findSensitive(inbound.text) : [];
-        if (sensitive.length) {
-          console.log(`[redacted] #${jidTag(jid)} sent ${sensitive.join(", ")}; not processed`);
-          try {
-            await sender.send(jid, { text: sensitiveReply(sensitive) }, sendOptions);
-          } catch (err) {
-            console.error("Failed to send the ID-number reply:", err);
-          }
-          return;
-        }
-
-        if (inbound.kind === "media") {
-          // Silence would look exactly like a broken bot: nudge an admitted
-          // sender who sent a photo/voice note/document with no caption.
-          try {
-            await sender.send(jid, {
-              text: "I can only read text messages right now — could you type your question instead?",
-            }, sendOptions);
-          } catch (err) {
-            console.error("Failed to send media-nudge reply:", err);
-          }
-          return;
-        }
-
-        await processMessage(jid, inbound, sendOptions, msg);
-      });
+    // "append": the offline backlog, grouped per chat (S23).
+    const byChat = new Map();
+    for (const item of fresh) {
+      const jid = item.msg.key.remoteJid;
+      byChat.set(jid, [...(byChat.get(jid) ?? []), item]);
+    }
+    for (const [jid, items] of byChat) {
+      const { answer, noteFor } = planBacklog(items.map((i) => i.msg));
+      if (noteFor) enqueue(jid, () => sendOfflineNote(noteFor).catch((err) => console.error("Failed to send the offline note:", err)));
+      for (const { msg, inbound } of items.filter((i) => answer.includes(i.msg))) {
+        latestInbound.set(jid, msg.key.id);
+        enqueue(jid, () => handleInbound(msg, inbound, { offline: true }));
+      }
     }
   });
 }
