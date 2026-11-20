@@ -1,6 +1,13 @@
 import OpenAI from "openai";
 
-const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+// Per-call deadline (FIX-03): the SDK default is 600 s x 3 attempts, far beyond what a
+// person on WhatsApp will wait. One call is bounded here; a transient failure is retried
+// once at the graph node (retryPolicy in graph.js), not inside the SDK as well.
+const client = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+  timeout: Number(process.env.OPENAI_TIMEOUT_MS ?? 90_000),
+  maxRetries: 0,
+});
 // Deliberately NOT the "-pro" tier: that's the highest-intelligence option
 // but takes 30-90s, which the system-audit found to be in direct tension
 // with this audience (W3C COGA flags cognitive fatigue during multi-step

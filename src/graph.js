@@ -9,6 +9,16 @@ import { webFallback, persistWebFallback } from "./websearch.js";
 // docs/conversation-design.md FIX-01.
 const DEFAULT_DEPS = { retrieve, topSimilarity, synthesize, webFallback, persistWebFallback };
 
+// FIX-03: a transient failure (AI Search 500, a dropped connection) is retried once,
+// silently, at the node. A deadline (AbortError/TimeoutError) is NOT retried: the user has
+// already waited the full budget. LangGraph RetryPolicy (pregel/utils).
+export const RAG_RETRY = {
+  maxAttempts: 2,
+  initialInterval: 500,
+  retryOn: (e) => !["AbortError", "TimeoutError"].includes(e?.name) && !/timed? ?out/i.test(String(e?.message ?? "")),
+  logWarning: false,
+};
+
 // Progressive disclosure, two short steps instead of one 6-option list —
 // W3C COGA guidance on impaired working memory (1-3 items, stricter than
 // the classic "7+-2") for anyone deciding under attention/focus difficulty.
@@ -444,23 +454,24 @@ function routeFromRoot(state) {
 }
 
 function buildGraph(overrides = {}) {
-  const answerFreeform = makeAnswerFreeform({ ...DEFAULT_DEPS, ...overrides });
+  const { retryPolicy, ...deps } = overrides;
+  const answerFreeform = makeAnswerFreeform({ ...DEFAULT_DEPS, ...deps });
   return new StateGraph(State)
   .addNode("greeting", greetingNode)
   .addNode("entry", entryNode)
   .addNode("reset", resetNode)
   .addNode("menu", menuNode)
-  .addNode("quickAnswer", quickAnswerNode(answerFreeform))
+  .addNode("quickAnswer", quickAnswerNode(answerFreeform), { retryPolicy: retryPolicy ?? RAG_RETRY })
   .addNode("tempPrompt", tempPromptNode)
   .addNode("settlePrompt", settlePromptNode)
   .addNode("setTopicBranch", setTopicBranchNode)
   .addNode("topicPrompt", topicPromptNode)
-  .addNode("topicAnswer", topicAnswerNode(answerFreeform))
+  .addNode("topicAnswer", topicAnswerNode(answerFreeform), { retryPolicy: retryPolicy ?? RAG_RETRY })
   .addNode("freeformPrompt", freeformPromptNode)
-  .addNode("freeformAnswer", freeformAnswerNode(answerFreeform))
+  .addNode("freeformAnswer", freeformAnswerNode(answerFreeform), { retryPolicy: retryPolicy ?? RAG_RETRY })
   .addNode("setSlotBranch", setSlotBranchNode)
-  .addNode("slotFill", slotFillNode(answerFreeform))
-  .addNode("slotSynthesis", slotSynthesisNode(answerFreeform))
+  .addNode("slotFill", slotFillNode(answerFreeform), { retryPolicy: retryPolicy ?? RAG_RETRY })
+  .addNode("slotSynthesis", slotSynthesisNode(answerFreeform), { retryPolicy: retryPolicy ?? RAG_RETRY })
 
   .addConditionalEdges(START, routeFromRoot, {
     greeting: "greeting",
