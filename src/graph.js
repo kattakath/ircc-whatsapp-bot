@@ -1,3 +1,4 @@
+import { parseControl } from "./control.js";
 import { StateGraph, Annotation, interrupt, Command, START, END } from "@langchain/langgraph";
 import { PostgresSaver } from "@langchain/langgraph-checkpoint-postgres";
 import { retrieve, topSimilarity } from "./db.js";
@@ -43,15 +44,9 @@ const TEMP_PROMPT_TEXT = "Got it — which one?\n1) Visit\n2) Study\n3) Work";
 const SETTLE_PROMPT_TEXT =
   "Got it — which one?\n1) Settle permanently (PR / Express Entry)\n2) Become a Canadian citizen";
 
-// Word-boundary match, not exact-string match — "menu please" or "can you
-// restart" should reset just as much as a bare "menu" does. Length-capped
-// so a genuinely long question that happens to contain one of these words
-// isn't misread as a reset command.
-const RESET_PATTERNS = [/\bmenu\b/i, /\brestart\b/i, /\breset\b/i, /\bstart (over|again)\b/i];
-function isResetCommand(text) {
-  const t = text.trim();
-  return t.length > 0 && t.length <= 30 && RESET_PATTERNS.some((p) => p.test(t));
-}
+// FIX-15 (C8): control words are normalised, then matched against the WHOLE message (src/control.js).
+// The old rule matched "reset" anywhere in 30 characters, so "reset my GCKey password" showed the menu.
+const isResetCommand = (text, opts) => !!parseControl(text ?? "", opts);
 
 // Slot answers come from someone who isn't very technical — a stray period,
 // extra space, or writing the number as a word shouldn't count as "invalid".
@@ -109,6 +104,7 @@ const TOPIC_BRANCHES = {
 const PR_SLOTS = [
   {
     key: "age",
+    hint: "Just the number, like 34.",
     prompt: "How old are you? (just the number)",
     parse: (t) => {
       const n = parseInt(t, 10);
@@ -118,6 +114,7 @@ const PR_SLOTS = [
   },
   {
     key: "education",
+    hint: "Just the number from the list, 1 to 7.",
     prompt:
       "What's your highest level of education?\n" +
       "1) High school or less\n" +
@@ -143,6 +140,7 @@ const PR_SLOTS = [
   },
   {
     key: "language",
+    hint: "Just the number from the list, 1 to 4.",
     prompt:
       "How would you rate your English or French?\n" +
       "1) Just starting out\n" +
@@ -162,6 +160,7 @@ const PR_SLOTS = [
   },
   {
     key: "workYears",
+    hint: "Just the number from the list, 1 to 4.",
     prompt:
       "How many years of skilled work experience do you have?\n" +
       "1) Less than 1 year\n" +
@@ -176,12 +175,14 @@ const PR_SLOTS = [
   },
   {
     key: "canadianExperience",
+    hint: "Just yes or no.",
     prompt: "Have you ever worked inside Canada? Reply yes or no.",
     parse: parseYesNo,
     describe: (v) => `Canadian work experience: ${v}`,
   },
   {
     key: "jobOfferOrPN",
+    hint: "Just yes or no.",
     prompt:
       "Do you have a valid job offer from a Canadian employer, or a provincial nomination? Reply yes or no.",
     parse: parseYesNo,
@@ -192,12 +193,14 @@ const PR_SLOTS = [
 const CITIZENSHIP_SLOTS = [
   {
     key: "prStatus",
+    hint: "Just yes or no.",
     prompt: "Do you currently have valid Canadian permanent resident (PR) status? Reply yes or no.",
     parse: parseYesNo,
     describe: (v) => `has PR status: ${v}`,
   },
   {
     key: "yearsPresent",
+    hint: "Just the number of days, like 900, or say *not sure*.",
     prompt:
       "How many days have you been physically present in Canada in the last 5 years? " +
       "Reply with the exact number of days (IRCC's physical presence calculator counts them: " +
@@ -207,6 +210,7 @@ const CITIZENSHIP_SLOTS = [
   },
   {
     key: "taxYears",
+    hint: "Just a number from 0 to 5.",
     prompt: "In how many of the last 5 years did you file Canadian income taxes? (0-5)",
     parse: (t) => {
       const n = parseInt(t, 10);
@@ -216,6 +220,7 @@ const CITIZENSHIP_SLOTS = [
   },
   {
     key: "age",
+    hint: "Just the number, like 34.",
     prompt: "How old are you? (just the number)",
     parse: (t) => {
       const n = parseInt(t, 10);
@@ -317,6 +322,10 @@ const State = Annotation.Root({
   bareReply: Annotation({ default: () => false }),
   // FIX-22: the canada.ca pages behind the last answer, for "show me the page".
   lastSources: Annotation({ default: () => [] }),
+  // FIX-15: consecutive no-matches at the current intake prompt (S28), and whether the last
+  // intake turn answered a side question and now waits for "continue or stop?" (S29).
+  noMatch: Annotation({ default: () => 0 }),
+  awaitingContinue: Annotation({ default: () => false }),
 });
 
 // No yes/no framing ("...do you?") — a closed question invites a
@@ -333,9 +342,29 @@ const GREETING_TEXT =
 
 const CLEAR_SLOTS = { __clear: true };
 
-function resetNode() {
-  return { pendingMessage: null, started: false, branch: null, slotIndex: 0, slots: CLEAR_SLOTS };
+// FIX-15: what each intake is called when it is stopped ("Okay, stopping the PR check.").
+const CHECK_LABEL = { 4: "PR check", 5: "citizenship check" };
+const atIntake = (state) => !!BRANCH_SLOTS[state.branch];
+
+// A reset clears the intake AND the referent context (S32). `cancel` at an intake says what it
+// stopped; an anchored phrase's remainder ("start over, I want to ask about…") is answered next.
+function resetNode(state) {
+  const control = parseControl(state.incomingText ?? "", { atIntake: atIntake(state) });
+  const stopped = control?.verb === "cancel" && CHECK_LABEL[state.branch];
+  return {
+    pendingMessage: stopped ? `Okay, stopping the ${stopped}.` : null,
+    incomingText: control?.rest ?? "",
+    started: false,
+    branch: null,
+    slotIndex: 0,
+    slots: CLEAR_SLOTS,
+    lastSources: [],
+    noMatch: 0,
+    awaitingContinue: false,
+    bareReply: false,
+  };
 }
+const routeFromReset = (state) => (state.incomingText ? "quickAnswer" : "menu");
 
 function entryNode() {
   return {}; // pass-through; routing happens in the conditional edge below
@@ -426,33 +455,63 @@ const freeformAnswerNode = (answerFreeform) => async function freeformAnswerNode
   return { pendingMessage: answer, lastSources };
 };
 
+// FIX-15 (S29): after a side question, "continue" resumes the intake and "stop" ends it.
+const CONTINUE_WORDS = new Set(["continue", "yes", "y", "ok", "okay", "sure", "go on", "go ahead", "resume", "carry on", "next", "👍", "haan", "ji"]);
+const STOP_WORDS = new Set(["stop", "no", "n", "nope", "nah", "end", "quit", "exit", "enough", "nahi"]);
+const lastWords = (t) => t.trim().toLowerCase().replace(/[.!?,]+$/, "").replace(/\s+/g, " ");
+
 const slotFillNode = (answerFreeform) => async function slotFillNode(state) {
   const slotDefs = BRANCH_SLOTS[state.branch];
   const currentSlot = slotDefs[state.slotIndex];
-  const prompt = state.pendingMessage ? `${state.pendingMessage}\n\n${currentSlot.prompt}` : currentSlot.prompt;
+  const label = CHECK_LABEL[state.branch];
+  // bareReply: the pending message stands alone (a hint, or "continue or stop?"), no slot prompt.
+  const prompt = state.bareReply
+    ? state.pendingMessage
+    : state.pendingMessage
+      ? `${state.pendingMessage}\n\n${currentSlot.prompt}`
+      : currentSlot.prompt;
   const text = interrupt(prompt);
+  const base = { bareReply: false, awaitingContinue: false };
 
-  if (isResetCommand(text)) {
-    return { incomingText: text };
+  if (isResetCommand(text, { atIntake: true })) {
+    return { ...base, incomingText: text };
+  }
+  if (state.awaitingContinue) {
+    if (CONTINUE_WORDS.has(lastWords(text))) return { ...base, pendingMessage: null, noMatch: 0 };
+    if (STOP_WORDS.has(lastWords(text))) return { ...base, incomingText: "cancel" }; // → reset: "Okay, stopping…"
+    // Anything else falls through: a slot answer is taken as one, another question is answered.
   }
 
   const parsed = currentSlot.parse(text);
   // A parse can decline with guidance (e.g. an estimate where an exact count is needed): stay on this slot.
   if (parsed && typeof parsed === "object" && parsed.reprompt) {
-    return { pendingMessage: parsed.reprompt };
+    return { ...base, pendingMessage: parsed.reprompt };
   }
   if (parsed === null) {
     if (looksLikeRealQuestion(text) && !/^[0-9]+$/.test(text.trim())) {
       const { text: answer, sources: lastSources } = await answerFreeform(text);
-      return { pendingMessage: `${answer}\n\nWhenever you're ready, back to the last question:`, lastSources };
+      return {
+        ...base,
+        pendingMessage: `${answer}\n\nContinue the ${label} (${state.slotIndex} of ${slotDefs.length} done), or stop?`,
+        bareReply: true,
+        awaitingContinue: true,
+        noMatch: 0,
+        lastSources,
+      };
     }
-    return { pendingMessage: "Sorry, I didn't quite catch that." };
+    // Escalating no-match (S28; Rasa/Google tapering): restate, then a hint, then the way out.
+    const noMatch = (state.noMatch ?? 0) + 1;
+    if (noMatch === 1) return { ...base, noMatch, pendingMessage: "Sorry, I didn't quite catch that." };
+    if (noMatch === 2) return { ...base, noMatch, pendingMessage: currentSlot.hint ?? "Sorry, I didn't quite catch that.", bareReply: !!currentSlot.hint };
+    return { ...base, noMatch, pendingMessage: `Want to stop the ${label}? Reply *menu* to go back to the menu, or answer to keep going:` };
   }
 
   return {
+    ...base,
     slots: { [currentSlot.key]: parsed },
     slotIndex: state.slotIndex + 1,
     pendingMessage: null,
+    noMatch: 0,
   };
 };
 
@@ -517,7 +576,7 @@ function routeFromSettlePrompt(state) {
 
 function routeFromSlotFill(state) {
   const text = (state.incomingText ?? "").trim();
-  if (isResetCommand(text)) return "reset";
+  if (isResetCommand(text, { atIntake: true })) return "reset";
   if (state.slotIndex >= BRANCH_SLOTS[state.branch].length) return "slotSynthesis";
   return "slotFill";
 }
@@ -585,7 +644,7 @@ function buildGraph(overrides = {}) {
     quickAnswer: "quickAnswer",
     smallTalk: "smallTalk",
   })
-  .addEdge("reset", "menu")
+  .addConditionalEdges("reset", routeFromReset, { menu: "menu", quickAnswer: "quickAnswer" })
   .addEdge("smallTalk", "menu")
   .addEdge("quickAnswer", "menu")
 
