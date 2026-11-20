@@ -14,7 +14,7 @@ globalThis.fetch = async (url) => {
 };
 
 const { MemorySaver } = await import("@langchain/langgraph");
-const { buildGraph } = await import("../../src/graph.js");
+const { buildGraph, RAG_RETRY } = await import("../../src/graph.js");
 const { handleTurn } = await import("../../src/turn.js");
 
 export const LIVE_DB_DEFAULT = "postgresql://mcp@127.0.0.1:5433/ragdb";
@@ -52,7 +52,9 @@ export function makeDeps({ answer = (q) => `Answer to: ${q}`, similarity = 0.9, 
  */
 export function makeHarness(depOpts = {}, { jid = "15550000001@s.whatsapp.net", now } = {}) {
   const { deps, calls } = makeDeps(depOpts);
-  const graph = buildGraph(deps).compile({ checkpointer: new MemorySaver() });
+  // Same retry semantics as production, minus the 500 ms wait.
+  const graph = buildGraph({ ...deps, retryPolicy: { ...RAG_RETRY, initialInterval: 1 } }).compile({ checkpointer: new MemorySaver() });
+  const failures = new Map(); // per-harness, so tests never share a saved failed question
   const outbox = [];
   const quiet = { log: () => {}, error: () => {} };
   const send = async (to, content, options) => {
@@ -63,11 +65,11 @@ export function makeHarness(depOpts = {}, { jid = "15550000001@s.whatsapp.net", 
   };
   async function turn(text, extra = {}) {
     const before = outbox.length;
-    const result = await handleTurn({ jid, text, graph, send, presence, logger: quiet, ...(now ? { now } : {}), ...extra });
+    const result = await handleTurn({ jid, text, graph, send, presence, logger: quiet, failures, ...(now ? { now } : {}), ...extra });
     const events = outbox.slice(before);
     return { ...result, events, sends: events.filter((e) => e.kind === "send").map((e) => e.text) };
   }
-  return { graph, calls, outbox, turn, jid };
+  return { graph, calls, outbox, turn, jid, failures };
 }
 
 /** Layer L4: the ONLY way a test may reach Postgres. Refuses the live checkpoint DB. */

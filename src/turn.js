@@ -8,6 +8,17 @@ import { Command } from "@langchain/langgraph";
 
 export const FILLER_TEXT = "One sec — checking the official IRCC info... 🍁";
 export const ERROR_TEXT = "Sorry, something went wrong on my end — try again in a moment.";
+export const OFFICIAL_LINK = "https://www.canada.ca/en/immigration-refugees-citizenship.html";
+// FIX-03 repair: name the failed question, say it is saved, offer *again* and the official
+// site — options, not a dead end (Ashktorab et al. CHI 2019; Google system-errors guidance).
+export function repairText(question) {
+  const q = question.length > 80 ? `${question.slice(0, 77)}…` : question;
+  return `Sorry — I couldn't finish answering "${q}". It's saved: reply *again* to retry, or ask something else.\nOfficial info: ${OFFICIAL_LINK}`;
+}
+export const AGAIN_RE = /^\s*(?:(?:try|ask)\s+)?again\s*[.!?]*\s*$|^\s*retry\s*[.!?]*\s*$/i;
+// Last failed question per chat, in memory only (lost on restart by design: nothing extra
+// is persisted about the user).
+const lastFailed = new Map();
 // FIX-05: a captioned photo/document is answered from its caption, and says so.
 export const CAPTION_PREFACE = "I can't open photos or files yet, so I'm answering from your caption.";
 export const FILLER_DELAY_MS = 4000;
@@ -28,12 +39,17 @@ export const STALE_MS = 7 * 24 * 60 * 60 * 1000;
  */
 // `preface` (e.g. CAPTION_PREFACE) goes above the reply; `sendOptions` (e.g. the chat's
 // ephemeralExpiration, FIX-05) rides on every message this turn sends.
-export async function handleTurn({ jid, text, graph, send, presence, preface = null, sendOptions, now = Date.now, logger = console }) {
+export async function handleTurn({ jid, text, graph, send, presence, preface = null, sendOptions, now = Date.now, logger = console, failures = lastFailed }) {
+  const failed = failures.get(jid);
+  // *again* after a failure re-asks the saved question (FIX-03, S03).
+  const question = failed && AGAIN_RE.test(text) ? failed.question : text;
+
   logger.log(`[in]  ${jid}: ${text}`);
 
   let answered = false;
   let presenceInterval = null;
   let fillerTimer = null;
+  let snapshotForRollback = null;
 
   try {
     await presence("composing", jid);
@@ -58,9 +74,10 @@ export async function handleTurn({ jid, text, graph, send, presence, preface = n
 
     const config = { configurable: { thread_id: jid } };
     const snapshot = await graph.getState(config);
-    const isFreshThread = snapshot.next.length === 0;
+    snapshotForRollback = snapshot;
+    const isFreshThread = snapshot.next.length === 0 || !!failed?.forceFresh;
     const isStale = snapshot.createdAt && now() - new Date(snapshot.createdAt).getTime() > STALE_MS;
-    const input = isFreshThread || isStale ? { incomingText: text } : new Command({ resume: text });
+    const input = isFreshThread || isStale ? { incomingText: question } : new Command({ resume: question });
     const result = await graph.invoke(input, config);
 
     const graphReply = result.__interrupt__?.[0]?.value;
@@ -69,6 +86,7 @@ export async function handleTurn({ jid, text, graph, send, presence, preface = n
       throw new Error(`Graph returned no interrupt to reply with: ${JSON.stringify(result)}`);
     }
 
+    failures.delete(jid);
     const reply = preface ? `${preface}\n\n${graphReply}` : graphReply;
     answered = true; // before sending, so a filler racing the reply cannot follow it
     logger.log(`[out] ${jid}: ${reply.slice(0, 120)}${reply.length > 120 ? "..." : ""}`);
@@ -76,8 +94,24 @@ export async function handleTurn({ jid, text, graph, send, presence, preface = n
     return { reply };
   } catch (err) {
     logger.error("Error handling message:", err);
+    // Atomic turn (FIX-03): a failed run leaves its input as a pending write on the head, so the
+    // NEXT message used to be dropped and this question re-run. Fork a fresh checkpoint from the
+    // pre-turn state (LangGraph time travel via updateState); a brand-new chat restarts instead.
+    const preTurn = snapshotForRollback;
+    let forceFresh = false;
+    if (preTurn?.config?.configurable?.checkpoint_id) {
+      try {
+        await graph.updateState(preTurn.config, {});
+      } catch (rollbackErr) {
+        logger.error("Rollback to the pre-turn checkpoint failed:", rollbackErr);
+        forceFresh = true;
+      }
+    } else {
+      forceFresh = true;
+    }
+    failures.set(jid, { question, forceFresh });
     try {
-      await send(jid, { text: ERROR_TEXT }, sendOptions);
+      await send(jid, { text: repairText(question) }, sendOptions);
     } catch (sendErr) {
       logger.error("Also failed to send the error reply:", sendErr);
     }

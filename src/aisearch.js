@@ -69,7 +69,9 @@ export function resetConfig() {
 
 async function call(path, init = {}) {
   const { base, headers } = config();
-  const res = await fetch(`${base}${path}`, { ...init, headers: { ...headers, ...init.headers } });
+  // Per-call deadline (FIX-03); a caller-supplied signal wins.
+  const signal = init.signal ?? AbortSignal.timeout(20_000);
+  const res = await fetch(`${base}${path}`, { ...init, signal, headers: { ...headers, ...init.headers } });
   const body = await res.json().catch(() => null);
   if (!res.ok || body?.success === false) {
     const errors = JSON.stringify(body?.errors ?? body ?? null);

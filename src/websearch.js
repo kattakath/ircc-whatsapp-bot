@@ -19,6 +19,7 @@ async function search(question) {
       "Content-Type": "application/json",
     },
     body: JSON.stringify({ q: `${question} ${SITE_SCOPE}` }),
+    signal: AbortSignal.timeout(15_000), // per-call deadline (FIX-03)
   });
   if (!res.ok) {
     throw new Error(`Serper search failed: ${res.status} ${await res.text()}`);
@@ -30,6 +31,7 @@ async function search(question) {
 async function fetchPageText(url) {
   const res = await fetch(url, {
     headers: { "User-Agent": "Mozilla/5.0 (compatible; ircc-whatsapp-bot/0.1)" },
+    signal: AbortSignal.timeout(15_000), // per-call deadline (FIX-03)
   });
   if (!res.ok) return null;
   const html = await res.text();

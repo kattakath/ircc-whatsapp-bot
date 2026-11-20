@@ -5,7 +5,7 @@ import { test, mock } from "node:test";
 import assert from "node:assert/strict";
 import { makeHarness, scratchPgUri, LIVE_DB_DEFAULT } from "./helpers.js";
 import { checkReply } from "./oracle.js";
-import { FILLER_TEXT, ERROR_TEXT, CAPTION_PREFACE } from "../../src/turn.js";
+import { FILLER_TEXT, ERROR_TEXT, CAPTION_PREFACE, repairText } from "../../src/turn.js";
 
 // --- L4 guard -----------------------------------------------------------------------
 
@@ -67,11 +67,14 @@ test("L2: a slow turn sends the filler once, then the answer (2 sends)", async (
   }
 });
 
-test("L2: a failing turn sends exactly one error message (today's dead end)", async () => {
+test("L2: a failing turn sends exactly one repair message (FIX-03: no dead end)", async () => {
   const h = makeHarness({ answer: async () => { throw new Error("LLM down"); } });
   await h.turn("hi");
   const r = await h.turn("How do I renew my PR card?");
-  assert.deepEqual(r.sends, [ERROR_TEXT]);
+  assert.deepEqual(r.sends, [repairText("How do I renew my PR card?")]);
+  assert.ok(!r.sends.includes(ERROR_TEXT));
+  assert.match(r.sends[0], /\*again\*/);
+  assert.match(r.sends[0], /canada\.ca/);
   assert.ok(r.error);
 });
 
@@ -134,4 +137,69 @@ test("S10/S09: a captioned turn is prefaced, and every send carries the chat tim
   assert.equal(r.sends.length, 1);
   assert.ok(r.sends[0].startsWith(CAPTION_PREFACE + "\n\n"));
   assert.ok(r.events.filter((e) => e.kind === "send").every((e) => e.options === opts));
+});
+
+// --- FIX-03: atomic failed turns -------------------------------------------------------
+
+// synthesize fails `n` times (every call while n > 0), then answers.
+function failingTimes(n, err = () => new Error("LLM down")) {
+  let left = n;
+  return async (q) => {
+    if (left > 0) { left -= 1; throw err(); }
+    return `Answer to: ${q}`;
+  };
+}
+
+test("S03: after a terminal error the NEXT question is answered (not the old one), and *again* re-asks the saved one", async () => {
+  const h = makeHarness({ answer: failingTimes(2) }); // 2 = the first attempt + its one retry
+  await h.turn("hi");
+  const r1 = await h.turn("What is the fee for a study permit?");
+  assert.deepEqual(r1.sends, [repairText("What is the fee for a study permit?")]);
+  const r2 = await h.turn("What about a visitor visa?");
+  assert.equal(h.calls.retrieve.at(-1).question, "What about a visitor visa?");
+  assert.match(r2.sends.at(-1), /^Answer to: What about a visitor visa\?/);
+});
+
+test("S03: *again* right after a failure re-runs the saved question", async () => {
+  const h = makeHarness({ answer: failingTimes(2) });
+  await h.turn("hi");
+  await h.turn("What is the fee for a study permit?");
+  const r = await h.turn("try again");
+  assert.equal(h.calls.retrieve.at(-1).question, "What is the fee for a study permit?");
+  assert.match(r.sends.at(-1), /^Answer to: What is the fee for a study permit\?/);
+  assert.equal(h.failures.size, 0, "the saved question is cleared after it is answered");
+});
+
+test("S04: a transient error is retried silently — a normal answer, no repair text", async () => {
+  const h = makeHarness({ answer: failingTimes(1) });
+  await h.turn("hi");
+  const r = await h.turn("How long is a study permit valid?");
+  assert.equal(r.sends.length, 1);
+  assert.match(r.sends[0], /^Answer to: How long is a study permit valid\?/);
+  assert.equal(h.calls.synthesize.length, 2, "one failed attempt + one retry");
+});
+
+test("FIX-03: a deadline (TimeoutError) is not retried", async () => {
+  const timeout = () => Object.assign(new Error("Request timed out."), { name: "TimeoutError" });
+  const h = makeHarness({ answer: failingTimes(1, timeout) });
+  await h.turn("hi");
+  const r = await h.turn("How long is a study permit valid?");
+  assert.equal(h.calls.synthesize.length, 1, "no retry after the deadline");
+  assert.deepEqual(r.sends, [repairText("How long is a study permit valid?")]);
+});
+
+test("S05: an error in a mid-intake side question keeps the intake where it was", async () => {
+  let failNext = false;
+  const h = makeHarness({ answer: async (q) => { if (failNext) throw new Error("LLM down"); return `Answer to: ${q}`; } });
+  await h.turn("hi");
+  await h.turn("2"); // settle
+  await h.turn("1"); // PR intake: age prompt
+  failNext = true;
+  await h.turn("what counts as skilled work?");
+  failNext = false;
+  const r = await h.turn("25");
+  const st = (await h.graph.getState({ configurable: { thread_id: h.jid } })).values;
+  assert.equal(st.slots.age, 25);
+  assert.equal(st.slotIndex, 1);
+  assert.match(r.sends.at(-1), /education/i);
 });
