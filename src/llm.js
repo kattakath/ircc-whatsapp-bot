@@ -68,10 +68,15 @@ pattern, not a stylistic add-on):
 // the same soft footer used for routine questions. Kept high-precision
 // (specific terms, not broad topic words) to avoid over-triggering.
 const HIGH_STAKES_PATTERN =
-  /\b(refused|refusal|rejected|denied|denial|appeal|deported|deportation|removal order|inadmissible|inadmissibility|detained|detention|misrepresentation|overstayed|overstay|expired status|status (?:has |had |is |was )?(?:expired|ended)|out of status|lost (?:my |our |his |her |their )?status|(?:visa|permit|visitor record) (?:has |had |is |was )?expired|procedural fairness|humanitarian and compassionate|deadline|missed my|running out of time)\b/i;
+  /\b(refused|refusal|rejected|denied|denial|appeal|deported|deportation|removal order|inadmissible|inadmissibility|detained|detention|misrepresentation|overstayed|overstay|expired status|procedural fairness|humanitarian and compassionate|deadline|missed my|running out of time)\b/i;
+
+// Lost temporary status, in the words people use ("my status ran out", "I overstayed"). ONE pattern:
+// graph.js also uses it to add IRCC's restoration terms to the retrieval query, so a phrasing that
+// finds the restoration pages is always high stakes too (two copies drifted once: "ran out").
+export const LOST_STATUS_RE = /\b(?:overstay(?:ed|ing)?|out of status|lost (?:my |our |his |her |their )?status|status (?:has |had |is |was )?(?:expired|ended|run out|ran out)|expired (?:status|visa|permit|study permit|work permit|visitor record)|(?:visa|permit|visitor record) (?:has |had |is |was )?(?:expired|ended))\b/i;
 
 export function isHighStakes(text) {
-  return HIGH_STAKES_PATTERN.test(text);
+  return HIGH_STAKES_PATTERN.test(text) || LOST_STATUS_RE.test(text);
 }
 
 const HIGH_STAKES_NOTE =
