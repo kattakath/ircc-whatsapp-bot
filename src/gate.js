@@ -103,3 +103,35 @@ export function isShortQuestion(raw) {
   if (!t || PROD_RE.test(norm(t))) return false;
   return (/\?\s*$/.test(t) && /\p{L}{2,}/u.test(t)) || /^[A-Za-z]{2,6}\??$/.test(t) && /[A-Z]{2,}/.test(t);
 }
+
+// --- FIX-39: forwarded messages (S51) ------------------------------------------------------
+// WhatsApp marks forwards (contextInfo.isForwarded, exposed by FIX-05). A forwarded message with
+// scam signs (money + urgency, or a threat + urgency/money) gets IRCC's own fraud guidance and is
+// never restated or searched. The facts below are from the IRCC page linked in the reply
+// (checked 2026-11-20): "We will never ask you for any sort of payment by telephone", "We will
+// never send you an email asking for your private information", "We do not send visas by email".
+const SCAM_URL = "https://www.canada.ca/en/immigration-refugees-citizenship/services/protect-fraud/internet-email-telephone.html";
+const REPORT_URL = "https://www.canada.ca/en/immigration-refugees-citizenship/services/protect-fraud/report-fraud.html";
+export const FRAUD_CHECK =
+  "⚠️ This forwarded message has signs of a scam. IRCC says it never asks for any payment by phone and never emails you asking for private information.\n" +
+  "Don't pay or share any details until you check yourself, in your IRCC account or on the official site:\n" +
+  `🔗 ${SCAM_URL}\n` +
+  `To report it: 🔗 ${REPORT_URL}`;
+export const FORWARDED_PREFACE = "This was forwarded — here's what the official canada.ca pages say:";
+
+const MONEY_RE = /\$\s?\d|\b(?:pay|payment|paid|fee|fine|penalty|gift ?cards?|bitcoin|crypto|wire|transfer|deposit|western union|money ?gram|e-?transfer)\b/i;
+const URGENCY_RE = /\b(?:now|immediately|urgent(?:ly)?|today|asap|within \d+ ?(?:hours?|hrs?|days?)|last chance|final notice|right away)\b/i;
+const THREAT_RE = /\b(?:cancel(?:led|ed)?|revoked?|deport(?:ed|ation)?|arrest(?:ed)?|police|suspend(?:ed)?|blocked|legal action|warrant)\b/i;
+
+/** Scam signs in a forwarded text: money + urgency, or a threat with urgency or money. */
+export function isScamLike(text) {
+  const t = text ?? "";
+  const money = MONEY_RE.test(t), urgent = URGENCY_RE.test(t), threat = THREAT_RE.test(t);
+  return (money && urgent) || (threat && (urgent || money));
+}
+
+/** What to do with a forwarded text: "fraud" (fixed reply), "forwarded" (answer with a preface), or null. */
+export function forwardedAction(inbound) {
+  if (!inbound?.forwarded || inbound.kind !== "text") return null;
+  return isScamLike(inbound.text) ? "fraud" : "forwarded";
+}
