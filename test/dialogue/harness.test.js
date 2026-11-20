@@ -380,3 +380,39 @@ test("FIX-10: each sent prompt's id and time are recorded for choice binding (C1
   assert.match(p.id, /^BOT\d+$/);
   assert.equal(p.sentAt, 1234);
 });
+
+// --- FIX-22: negative-feedback repair -----------------------------------------------------
+
+import { SOURCES_NONE } from "../../src/gate.js";
+const STUB_URL = "https://www.canada.ca/en/immigration-refugees-citizenship/services/stub.html";
+
+test("S18: a bare complaint gets options (another way, the source, a licensed rep), no RAG; 'show me the page' gives the source", async () => {
+  const h = makeHarness();
+  await h.turn("hi");
+  await h.turn("What is the fee for a work permit?");
+  const before = h.calls.retrieve.length;
+  const r1 = await h.turn("that is wrong");
+  assert.deepEqual(r1.sends, [REPLIES.complaint]);
+  assert.match(REPLIES.complaint, /\*source\*/);
+  assert.match(REPLIES.complaint, /licensed consultant or lawyer/);
+  const r2 = await h.turn("show me the page");
+  assert.match(r2.sends[0], new RegExp(STUB_URL.replace(/[.?]/g, "\\$&")));
+  assert.equal(h.calls.retrieve.length, before, "no RAG for the complaint or the source request");
+});
+
+test("S41: a complaint WITH content is answered (apology first); a bare 'wrong' gets the options", async () => {
+  const h = makeHarness();
+  await h.turn("hi");
+  await h.turn("What is the fee for a work permit?");
+  const r = await h.turn("no thats wrong, I asked for my mother not me");
+  assert.equal(h.calls.retrieve.at(-1).question, "no thats wrong, I asked for my mother not me");
+  assert.match(r.sends[0], /^Sorry about that — Answer to:/);
+  assert.deepEqual((await h.turn("wrong")).sends, [REPLIES.complaint]);
+});
+
+test("FIX-22: asking for the source before any answer says so instead of searching", async () => {
+  const h = makeHarness();
+  await h.turn("hi");
+  assert.deepEqual((await h.turn("source")).sends, [SOURCES_NONE]);
+  assert.equal(h.calls.retrieve.length, 0);
+});
