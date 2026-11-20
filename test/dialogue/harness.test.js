@@ -406,8 +406,9 @@ test("S41: a complaint WITH content is answered (apology first); a bare 'wrong' 
   await h.turn("hi");
   await h.turn("What is the fee for a work permit?");
   const r = await h.turn("no thats wrong, I asked for my mother not me");
-  assert.equal(h.calls.retrieve.at(-1).question, "no thats wrong, I asked for my mother not me");
-  assert.match(r.sends[0], /^Sorry about that — Answer to:/);
+  // Since FIX-16 the content is rewritten in context (stub: "… (about: <previous question>)").
+  assert.match(h.calls.retrieve.at(-1).question, /I asked for my mother not me \(about: What is the fee for a work permit\?\)/);
+  assert.match(r.sends[0], /^Sorry about that — 📌 /);
   assert.deepEqual((await h.turn("wrong")).sends, [REPLIES.complaint]);
 });
 

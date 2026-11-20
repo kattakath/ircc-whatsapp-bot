@@ -2,7 +2,7 @@ import { parseControl } from "./control.js";
 import { StateGraph, Annotation, interrupt, Command, START, END } from "@langchain/langgraph";
 import { PostgresSaver } from "@langchain/langgraph-checkpoint-postgres";
 import { retrieve, topSimilarity } from "./db.js";
-import { LOST_STATUS_RE, isHighStakes, synthesize } from "./llm.js";
+import { LOST_STATUS_RE, isHighStakes, rewrite, synthesize } from "./llm.js";
 import { isMoreRequest, layoutAnswer, nextChunk } from "./layout.js";
 import { clarificationFor, resolveClarification } from "./clarify.js";
 import { compoundQuestion, restNote, splitCompound } from "./compound.js";
@@ -13,7 +13,7 @@ import { SOURCES_NONE, classifyAct, isComplaintWithContent, isShortQuestion } fr
 // Everything that leaves the process (retrieval, web fallback, the LLM). buildGraph(deps)
 // takes overrides so the offline dialogue harness (test/dialogue/) runs with stubs:
 // docs/conversation-design.md FIX-01.
-const DEFAULT_DEPS = { retrieve, topSimilarity, synthesize, webFallback, persistWebFallback };
+const DEFAULT_DEPS = { retrieve, topSimilarity, synthesize, webFallback, persistWebFallback, rewrite };
 
 // FIX-03: a transient failure (AI Search 500, a dropped connection) is retried once,
 // silently, at the node. A deadline (AbortError/TimeoutError) is NOT retried: the user has
@@ -383,6 +383,8 @@ const State = Annotation.Root({
   // FIX-19: a clarifying question just asked ({ kind, key?, program? }); `clarifyNow` is the one
   // the CURRENT message may answer — menuNode moves it over and clears it, so it binds only once.
   pendingClarify: Annotation({ default: () => null }),
+  // FIX-16 (C13): the last ≤ 2 questions answered ({ q, at }), as rewritten; 4 h clock (C9).
+  lastTurns: Annotation({ default: () => [] }),
   clarifyNow: Annotation({ default: () => null }),
 });
 
@@ -421,6 +423,7 @@ function resetNode(state) {
     awaitingContinue: false,
     editingSlot: null,
     answerRemainder: null,
+    lastTurns: [],
     bareReply: false,
   };
 }
@@ -524,13 +527,43 @@ function smallTalkNode(state) {
 // precedent) instead of a greeting that ignores the question (conditional relevance, Schegloff 1968).
 const INTRO_LINE = "👋🏽 I'm Izzy's Minion 🤓, a helper bot (not IRCC, not a person). I answer from public canada.ca pages.";
 
-const quickAnswerNode = (answerFreeform) => async function quickAnswerNode(state) {
-  const tier = tierFor(state, state.incomingText);
-  const result = await answerFreeform(state.incomingText, null, { tier });
+// FIX-16 (C13): the rewrite gate. Only a follow-up that cannot stand alone is rewritten: it opens
+// with a repair marker, or it is short or uses a pronoun AND names no programme. Needs fresh context.
+const REPAIR_START = /^(?:no|nope|i meant|i mean|actually|what about|how about|and|but|also|sorry|wrong|thats wrong|that's wrong|ignore that)\b/i;
+const PRONOUN = /\b(?:it|this|that|they|them|those|these|its)\b/i;
+const PROGRAMME = /\b(?:permits?|visas?|pr|permanent|citizenship|express entry|pgwp|sowp|iec|lmia|eta|sponsor\w*|passport|pnp|caregiver|asylum|refugee|biometrics)\b/i;
+const freshTurns = (turns) => (turns ?? []).filter((t) => fresh(t.at));
+export function needsRewrite(text, lastTurns) {
+  if (!freshTurns(lastTurns).length) return false;
+  const t = String(text ?? "").trim();
+  if (REPAIR_START.test(t)) return true;
+  if (PROGRAMME.test(t)) return false;
+  return t.split(/\s+/).length <= 5 || PRONOUN.test(t);
+}
+/** The question to answer: the message itself, or its rewrite in context (shown as a 📌 heading). */
+async function contextualize(state, rewriteFn) {
+  const text = state.incomingText ?? "";
+  if (!needsRewrite(text, state.lastTurns)) return { question: text, rewritten: false };
+  try {
+    const q = await rewriteFn(text, freshTurns(state.lastTurns).map((t) => t.q));
+    return q && q !== text ? { question: q, rewritten: true } : { question: text, rewritten: false };
+  } catch (err) {
+    console.error(`[rewrite] failed, answering the message as sent: ${err.message}`);
+    return { question: text, rewritten: false };
+  }
+}
+const pushTurn = (turns, q) => [...freshTurns(turns), { q, at: Date.now() }].slice(-2);
+
+const quickAnswerNode = (answerFreeform, rewriteFn) => async function quickAnswerNode(state) {
+  const { question, rewritten } = await contextualize(state, rewriteFn);
+  const tier = isHighStakes(state.incomingText ?? "") ? "strong" : tierFor(state, question);
+  const result = await answerFreeform(question, null, { tier });
+  // FIX-16: the interpretation is shown, so a wrong rewrite is visible at once (Clark & Brennan 1991).
+  const body = rewritten ? `📌 *${question}*\n\n${result.text}` : result.text;
   // FIX-22 (C14): a complaint that still carries content is answered, opening with an apology.
-  const answer = isComplaintWithContent(state.incomingText) ? `Sorry about that — ${result.text}` : result.text;
+  const answer = isComplaintWithContent(state.incomingText) ? `Sorry about that — ${body}` : body;
   const pendingMessage = state.hasGreeted ? answer : `${INTRO_LINE}\n\n${answer}`;
-  return { pendingMessage, hasGreeted: true, ...answered(result, tier) };
+  return { pendingMessage, hasGreeted: true, ...answered(result, tier), lastTurns: pushTurn(state.lastTurns, question) };
 };
 
 function topicPromptNode(state) {
@@ -543,7 +576,7 @@ const topicAnswerNode = (answerFreeform) => async function topicAnswerNode(state
   const branch = TOPIC_BRANCHES[state.branch];
   const tier = tierFor(state, state.incomingText);
   const result = await answerFreeform(state.incomingText, branch.sources, { tier });
-  return { pendingMessage: result.text, branch: null, ...answered(result, tier) };
+  return { pendingMessage: result.text, branch: null, ...answered(result, tier), lastTurns: pushTurn(state.lastTurns, state.incomingText) };
 };
 
 function freeformPromptNode(state) {
@@ -570,10 +603,12 @@ function settlePromptNode() {
   return { incomingText: translated ?? text };
 }
 
-const freeformAnswerNode = (answerFreeform) => async function freeformAnswerNode(state) {
-  const tier = tierFor(state, state.incomingText);
-  const result = await answerFreeform(state.incomingText, null, { tier });
-  return { pendingMessage: result.text, ...answered(result, tier) };
+const freeformAnswerNode = (answerFreeform, rewriteFn) => async function freeformAnswerNode(state) {
+  const { question, rewritten } = await contextualize(state, rewriteFn);
+  const tier = isHighStakes(state.incomingText ?? "") ? "strong" : tierFor(state, question);
+  const result = await answerFreeform(question, null, { tier });
+  const text = rewritten ? `📌 *${question}*\n\n${result.text}` : result.text;
+  return { pendingMessage: text, ...answered(result, tier), lastTurns: pushTurn(state.lastTurns, question) };
 };
 
 // FIX-15 (S29): after a side question, "continue" resumes the intake and "stop" ends it.
@@ -806,7 +841,8 @@ function routeFromRoot(state) {
 
 function buildGraph(overrides = {}) {
   const { retryPolicy, ...deps } = overrides;
-  const answerFreeform = makeAnswerFreeform({ ...DEFAULT_DEPS, ...deps });
+  const allDeps = { ...DEFAULT_DEPS, ...deps };
+  const answerFreeform = makeAnswerFreeform(allDeps);
   return new StateGraph(State)
   .addNode("greeting", greetingNode)
   .addNode("entry", entryNode)
@@ -816,14 +852,14 @@ function buildGraph(overrides = {}) {
   .addNode("more", moreNode)
   .addNode("clarify", clarifyNode)
   .addNode("clarifyAnswer", clarifyAnswerNode)
-  .addNode("quickAnswer", quickAnswerNode(answerFreeform), { retryPolicy: retryPolicy ?? RAG_RETRY })
+  .addNode("quickAnswer", quickAnswerNode(answerFreeform, allDeps.rewrite), { retryPolicy: retryPolicy ?? RAG_RETRY })
   .addNode("tempPrompt", tempPromptNode)
   .addNode("settlePrompt", settlePromptNode)
   .addNode("setTopicBranch", setTopicBranchNode)
   .addNode("topicPrompt", topicPromptNode)
   .addNode("topicAnswer", topicAnswerNode(answerFreeform), { retryPolicy: retryPolicy ?? RAG_RETRY })
   .addNode("freeformPrompt", freeformPromptNode)
-  .addNode("freeformAnswer", freeformAnswerNode(answerFreeform), { retryPolicy: retryPolicy ?? RAG_RETRY })
+  .addNode("freeformAnswer", freeformAnswerNode(answerFreeform, allDeps.rewrite), { retryPolicy: retryPolicy ?? RAG_RETRY })
   .addNode("setSlotBranch", setSlotBranchNode)
   .addNode("slotFill", slotFillNode(answerFreeform), { retryPolicy: retryPolicy ?? RAG_RETRY })
   .addNode("slotSynthesis", slotSynthesisNode(answerFreeform), { retryPolicy: retryPolicy ?? RAG_RETRY })

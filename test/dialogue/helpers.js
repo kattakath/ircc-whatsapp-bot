@@ -20,8 +20,8 @@ const { handleTurn } = await import("../../src/turn.js");
 export const LIVE_DB_DEFAULT = "postgresql://mcp@127.0.0.1:5433/ragdb";
 
 /** Stub dependencies that record every call. `answer` decides the LLM text. */
-export function makeDeps({ answer = (q) => `Answer to: ${q}`, similarity = 0.9, chunks, web = [] } = {}) {
-  const calls = { retrieve: [], synthesize: [], webFallback: [], persist: [] };
+export function makeDeps({ answer = (q) => `Answer to: ${q}`, similarity = 0.9, chunks, web = [], rewrite = null } = {}) {
+  const calls = { retrieve: [], synthesize: [], webFallback: [], persist: [], rewrite: [] };
   const deps = {
     retrieve: async (question, opts) => {
       calls.retrieve.push({ question, opts });
@@ -40,6 +40,11 @@ export function makeDeps({ answer = (q) => `Answer to: ${q}`, similarity = 0.9, 
     },
     persistWebFallback: async (cs) => {
       calls.persist.push(cs);
+    },
+    // FIX-16: the question-in-context rewrite (an LLM call in production).
+    rewrite: async (question, previous) => {
+      calls.rewrite.push({ question, previous });
+      return rewrite ? rewrite(question, previous) : `${question} (about: ${previous.at(-1)})`;
     },
   };
   return { deps, calls };
