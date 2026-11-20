@@ -7,6 +7,7 @@ import pino from "pino";
 import { builder, pendingPromptText } from "./graph.js";
 import { mediaReply } from "./media.js";
 import { createEditTracker, editedText, isRevoke } from "./edits.js";
+import { createSecretStore, decryptEditEnvelope, isEncryptedEdit } from "./editcrypto.js";
 import { ANSWERED_ABOVE, createDedupe, isDedupeCandidate } from "./dedupe.js";
 import { FORWARDED_PREFACE, fraudCheck, scamAction } from "./gate.js";
 import { admit, classifyInbound, jidTag } from "./ingress.js";
@@ -74,6 +75,7 @@ const mediaStreak = new Map(); // FIX-23: consecutive captionless media per chat
 const dedupe = createDedupe(); // FIX-38: resends of the same free-text question
 const seen = createSeen(); // FIX-13: message ids already handled ("append" and "notify" can repeat one)
 const edits = createEditTracker(); // FIX-14: edits and deletes, by message id
+const secrets = createSecretStore(); // FIX-14b: each recent inbound message's secret, to decrypt its edits
 const EDIT_PREFACE = "You edited your question — here's the updated answer:";
 
 const MAX_RECONNECT_ATTEMPTS = 3;
@@ -312,11 +314,17 @@ async function start() {
     for (const msg of messages) {
       if (!acceptInbound(msg) || seen.has(msg.key.id)) continue;
       seen.add(msg.key.id);
+      // FIX-14b: current clients send an edit encrypted with the original message's secret.
+      if (isEncryptedEdit(msg.message)) {
+        const decrypted = decryptEditEnvelope(msg, { secrets });
+        if (decrypted) onMessageUpdate(decrypted);
+        continue;
+      }
+      secrets.remember(msg.key.id, msg.message?.messageContextInfo?.messageSecret);
       // Reactions, protocol messages and the like never earn a reply (a 👍 answered would be noise).
       const inbound = classifyInbound(msg.message);
       if (inbound.kind === "other") {
-        // Diagnostic (message type keys only, never content): which wrapper an edit or a delete
-        // arrives in on this Baileys version (FIX-14 live check found no messages.update for it).
+        // Diagnostic (message type keys only, never content), kept to see how a delete arrives.
         console.log(`[other] #${jidTag(msg.key.remoteJid)} ${type} keys=${Object.keys(msg.message ?? {}).join(",")}`);
         continue;
       }
@@ -355,27 +363,29 @@ async function start() {
 
   // FIX-14: edits and "delete for everyone" arrive as messages.update (Baileys MESSAGE_EDIT/REVOKE).
   // The edit's upsert (an editedMessage protocol message) is "other" in classifyInbound: nothing.
-  sock.ev.on("messages.update", (updates) => {
-    for (const { key, update } of updates) {
-      const jid = key?.remoteJid ?? "";
-      // Diagnostic: content-bearing updates only (receipts carry just `status`); keys, never content.
-      if (update && ("message" in update || "messageStubType" in update)) {
-        console.log(`[update] #${jidTag(jid)} fromMe=${!!key?.fromMe} keys=${Object.keys(update).join(",")}`);
-      }
-      if (!key?.id || key.fromMe || !(jid.endsWith("@s.whatsapp.net") || jid.endsWith("@lid"))) continue;
-      if (isRevoke(update)) {
-        edits.onRevoke(key.id);
-        continue;
-      }
-      const text = editedText(update);
-      if (!text) continue;
-      const action = edits.onEdit(key.id, text);
-      if (action === "typo") console.log(`[edit] #${jidTag(jid)} typo-only edit; not re-answered`);
-      if (action !== "reanswer") continue;
-      console.log(`[edit] #${jidTag(jid)} edit changed the meaning; re-answering`);
-      const inbound = { kind: "text", text, captioned: false, forwarded: false };
-      enqueue(jid, () => handleInbound({ key, message: { conversation: text } }, inbound, { edited: true }));
+  // One handler for an edit or delete, whether Baileys emitted it or editcrypto.js decrypted it.
+  function onMessageUpdate({ key, update }) {
+    const jid = key?.remoteJid ?? "";
+    // Diagnostic: content-bearing updates only (receipts carry just `status`); keys, never content.
+    if (update && ("message" in update || "messageStubType" in update)) {
+      console.log(`[update] #${jidTag(jid)} fromMe=${!!key?.fromMe} keys=${Object.keys(update).join(",")}`);
     }
+    if (!key?.id || key.fromMe || !(jid.endsWith("@s.whatsapp.net") || jid.endsWith("@lid"))) return;
+    if (isRevoke(update)) {
+      edits.onRevoke(key.id);
+      return;
+    }
+    const text = editedText(update);
+    if (!text) return;
+    const action = edits.onEdit(key.id, text);
+    if (action === "typo") console.log(`[edit] #${jidTag(jid)} typo-only edit; not re-answered`);
+    if (action !== "reanswer") return;
+    console.log(`[edit] #${jidTag(jid)} edit changed the meaning; re-answering`);
+    const inbound = { kind: "text", text, captioned: false, forwarded: false };
+    enqueue(jid, () => handleInbound({ key, message: { conversation: text } }, inbound, { edited: true }));
+  }
+  sock.ev.on("messages.update", (updates) => {
+    for (const u of updates) onMessageUpdate(u);
   });
 }
 
