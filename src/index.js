@@ -314,7 +314,12 @@ async function start() {
       seen.add(msg.key.id);
       // Reactions, protocol messages and the like never earn a reply (a 👍 answered would be noise).
       const inbound = classifyInbound(msg.message);
-      if (inbound.kind === "other") continue;
+      if (inbound.kind === "other") {
+        // Diagnostic (message type keys only, never content): which wrapper an edit or a delete
+        // arrives in on this Baileys version (FIX-14 live check found no messages.update for it).
+        console.log(`[other] #${jidTag(msg.key.remoteJid)} ${type} keys=${Object.keys(msg.message ?? {}).join(",")}`);
+        continue;
+      }
       fresh.push({ msg, inbound });
     }
 
@@ -353,6 +358,10 @@ async function start() {
   sock.ev.on("messages.update", (updates) => {
     for (const { key, update } of updates) {
       const jid = key?.remoteJid ?? "";
+      // Diagnostic: content-bearing updates only (receipts carry just `status`); keys, never content.
+      if (update && ("message" in update || "messageStubType" in update)) {
+        console.log(`[update] #${jidTag(jid)} fromMe=${!!key?.fromMe} keys=${Object.keys(update).join(",")}`);
+      }
       if (!key?.id || key.fromMe || !(jid.endsWith("@s.whatsapp.net") || jid.endsWith("@lid"))) continue;
       if (isRevoke(update)) {
         edits.onRevoke(key.id);

@@ -65,3 +65,11 @@ test("no space is left before punctuation where a marker was stripped", () => {
   const r = renderAnswer("You can ask to have them added at no fee [3] . Then apply [1] , and wait [2]!", [chunk(ETA, 0.9), chunk(VISIT, 0.8), chunk(ETA, 0.7)]);
   assert.match(r.text, /^You can ask to have them added at no fee\. Then apply, and wait!/);
 });
+
+test("gpt-oss's full-width markers (【1】, 【2†L3-L5】) pick sources and never show (seen live 2026-11-20)", () => {
+  const r = renderAnswer("Visitors can stay up to 6 months.\n\n*Note:* talk to a licensed professional.【2】 Fees apply【1†L3-L5】.", [chunk(VISIT, 0.9), chunk(ETA, 0.8)]);
+  assert.ok(!/【|】|†/.test(r.text), r.text);
+  assert.match(r.text, /licensed professional\. Fees apply\./);
+  assert.deepEqual(r.sources, [ETA, VISIT]);
+  assert.equal(r.zeroMarkers, false);
+});

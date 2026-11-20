@@ -126,6 +126,9 @@ function isAllowedSource(url) {
  * Returns { text, sources, dropped, zeroMarkers }.
  */
 export function renderAnswer(markdown, chunks = []) {
+  // gpt-oss also cites in its own full-width form, 【1】 or 【1†L3-L5】 (seen live 2026-11-20):
+  // fold it into [n] first, so it picks sources and is stripped like any other marker.
+  markdown = String(markdown ?? "").replace(/【(\d{1,2})(?:†[^】]*)?】/g, "[$1]");
   const allowed = new Set(chunks.map((c) => c?.metadata?.url).filter((u) => u && isAllowedSource(u)));
   const ctx = { allow: (u) => allowed.has(u), dropped: 0 };
   // Links are judged at the token; a bare URL that survived as plain text is judged here.
