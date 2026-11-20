@@ -5,6 +5,7 @@ import { retrieve, topSimilarity } from "./db.js";
 import { LOST_STATUS_RE, isHighStakes, synthesize } from "./llm.js";
 import { isMoreRequest, layoutAnswer, nextChunk } from "./layout.js";
 import { clarificationFor, resolveClarification } from "./clarify.js";
+import { compoundQuestion, restNote, splitCompound } from "./compound.js";
 import { webFallback, persistWebFallback } from "./websearch.js";
 import { renderAnswer } from "./render.js";
 import { SOURCES_NONE, classifyAct, isComplaintWithContent, isShortQuestion } from "./gate.js";
@@ -278,6 +279,7 @@ function looksLikeRealQuestion(text) {
 // precision for zero extra latency (an LLM grading call would stack with
 // the already-slow synthesis call).
 const GRADE_THRESHOLD = 0.6;
+const PER_PART_CHUNKS = 4; // FIX-34: per sub-question, so 3 parts stay near the single-question 8
 
 // Lay wording for lost status ("my status expired", "I overstayed") retrieved only general visitor
 // pages, while "how do I restore my status" ranked IRCC's restoration pages first (measured
@@ -291,31 +293,51 @@ export function expandRetrievalQuery(question) {
 }
 
 function makeAnswerFreeform({ retrieve, topSimilarity, synthesize, webFallback, persistWebFallback }) {
-  // `retrievalQuery` (FIX-07): what goes to AI Search and Serper. Defaults to the question;
-  // the intake summary passes a generic query so the user's profile only reaches the LOCAL model.
-  return async function answerFreeform(question, sources = null, { retrievalQuery = expandRetrievalQuery(question), tier = "short", after = null } = {}) {
-  let chunks = await retrieve(retrievalQuery, { sources });
-  const gradedWell = topSimilarity(chunks) >= GRADE_THRESHOLD;
-
-  if (!gradedWell) {
-    const webChunks = await webFallback(retrievalQuery);
+  // CRAG-style graded retrieval for one query: local index first; below the grade, a canada.ca-
+  // scoped web search replaces it (not a blend). If that is empty too, the (possibly empty) local
+  // chunks stand, and synthesize() says it doesn't know rather than guessing.
+  async function retrieveGraded(query, sources, limit) {
+    let chunks = await retrieve(query, limit ? { sources, limit } : { sources });
+    if (topSimilarity(chunks) >= GRADE_THRESHOLD) return chunks;
+    const webChunks = await webFallback(query);
     if (webChunks.length > 0) {
-      chunks = webChunks; // discard local — CRAG's "incorrect" branch, not a blend
-      persistWebFallback(webChunks).catch((err) =>
-        console.error("Background persistWebFallback failed:", err)
-      );
+      chunks = webChunks;
+      persistWebFallback(webChunks).catch((err) => console.error("Background persistWebFallback failed:", err));
     }
-    // If web fallback also came up empty, fall through with the original
-    // (possibly empty) local chunks — synthesize() gives an honest "don't
-    // know" rather than guessing.
+    return chunks;
   }
 
-  // FIX-04: code, not the model, owns WhatsApp formatting and the source links.
-  // FIX-22: the sources travel with the text, so "show me the page" can answer from them.
-  // FIX-18: code owns the layout too — body cap above WhatsApp's fold, tiered disclaimer, overflow.
-  const rendered = renderAnswer(await synthesize(question, chunks), chunks);
-  const { text, remainder } = layoutAnswer({ body: rendered.body, sources: rendered.sources, tier, after });
-  return { text, sources: rendered.sources, remainder };
+  // `retrievalQuery` (FIX-07): what goes to AI Search and Serper. Defaults to the question;
+  // the intake summary passes a generic query so the user's profile only reaches the LOCAL model.
+  return async function answerFreeform(question, sources = null, opts = {}) {
+    const { tier = "short", after = null } = opts;
+    // FIX-34 (S43): a compound question is retrieved per part (≤ 3, in parallel, 4 chunks each,
+    // de-duplicated) and answered in ONE synthesis call with a section per part; any further part
+    // is named under the answer. A caller-supplied retrievalQuery (the intake summary) is never split.
+    const split = opts.retrievalQuery ? { parts: [question], rest: [] } : splitCompound(question);
+    let chunks;
+    let synthQuestion = question;
+    let note = null;
+    if (split.parts.length > 1) {
+      const groups = await Promise.all(split.parts.map((p) => retrieveGraded(expandRetrievalQuery(p), sources, PER_PART_CHUNKS)));
+      const seen = new Set();
+      chunks = groups.flat().filter((c) => {
+        const k = `${c?.metadata?.url ?? ""}|${String(c?.content ?? "").slice(0, 200)}`;
+        return seen.has(k) ? false : (seen.add(k), true);
+      });
+      synthQuestion = compoundQuestion(split.parts);
+      note = restNote(split.rest);
+    } else {
+      chunks = await retrieveGraded(opts.retrievalQuery ?? expandRetrievalQuery(question), sources);
+    }
+
+    // FIX-04: code, not the model, owns WhatsApp formatting and the source links.
+    // FIX-22: the sources travel with the text, so "show me the page" can answer from them.
+    // FIX-18: code owns the layout too — body cap above WhatsApp's fold, tiered disclaimer, overflow.
+    const rendered = renderAnswer(await synthesize(synthQuestion, chunks), chunks);
+    const afterLine = [note, after].filter(Boolean).join("\n\n") || null;
+    const { text, remainder } = layoutAnswer({ body: rendered.body, sources: rendered.sources, tier, after: afterLine });
+    return { text, sources: rendered.sources, remainder };
   };
 }
 
