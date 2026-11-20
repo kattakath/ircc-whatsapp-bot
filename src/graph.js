@@ -364,7 +364,13 @@ function resetNode(state) {
     bareReply: false,
   };
 }
-const routeFromReset = (state) => (state.incomingText ? "quickAnswer" : "menu");
+// The remainder goes through the same gate as any message: "never mind, thanks" is a closing.
+function routeFromReset(state) {
+  const rest = state.incomingText ?? "";
+  if (!rest) return "menu";
+  if (classifyAct(rest)) return "smallTalk";
+  return looksLikeRealQuestion(rest) ? "quickAnswer" : "menu";
+}
 
 function entryNode() {
   return {}; // pass-through; routing happens in the conditional edge below
@@ -457,7 +463,9 @@ const freeformAnswerNode = (answerFreeform) => async function freeformAnswerNode
 
 // FIX-15 (S29): after a side question, "continue" resumes the intake and "stop" ends it.
 const CONTINUE_WORDS = new Set(["continue", "yes", "y", "ok", "okay", "sure", "go on", "go ahead", "resume", "carry on", "next", "👍", "haan", "ji"]);
-const STOP_WORDS = new Set(["stop", "no", "n", "nope", "nah", "end", "quit", "exit", "enough", "nahi"]);
+// Only an explicit stop ends the check; a bare "no" is ambiguous here and gets one clarifying line.
+const STOP_WORDS = new Set(["stop", "end", "quit", "exit", "enough", "stop it"]);
+const AMBIGUOUS_NO = new Set(["no", "n", "nope", "nah", "nahi", "not now"]);
 const lastWords = (t) => t.trim().toLowerCase().replace(/[.!?,]+$/, "").replace(/\s+/g, " ");
 
 const slotFillNode = (answerFreeform) => async function slotFillNode(state) {
@@ -479,6 +487,9 @@ const slotFillNode = (answerFreeform) => async function slotFillNode(state) {
   if (state.awaitingContinue) {
     if (CONTINUE_WORDS.has(lastWords(text))) return { ...base, pendingMessage: null, noMatch: 0 };
     if (STOP_WORDS.has(lastWords(text))) return { ...base, incomingText: "cancel" }; // → reset: "Okay, stopping…"
+    if (AMBIGUOUS_NO.has(lastWords(text))) {
+      return { ...base, pendingMessage: `Reply *stop* to end the ${label}, or *continue* to keep going.`, bareReply: true, awaitingContinue: true };
+    }
     // Anything else falls through: a slot answer is taken as one, another question is answered.
   }
 
@@ -644,7 +655,7 @@ function buildGraph(overrides = {}) {
     quickAnswer: "quickAnswer",
     smallTalk: "smallTalk",
   })
-  .addConditionalEdges("reset", routeFromReset, { menu: "menu", quickAnswer: "quickAnswer" })
+  .addConditionalEdges("reset", routeFromReset, { menu: "menu", quickAnswer: "quickAnswer", smallTalk: "smallTalk" })
   .addEdge("smallTalk", "menu")
   .addEdge("quickAnswer", "menu")
 

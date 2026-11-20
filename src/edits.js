@@ -65,7 +65,9 @@ export function isMeaningfulEdit(before, after) {
   if (changed.some((w) => /\d/.test(w) || NEGATIONS.has(w))) return true;
   const gone = removed.filter((w) => !STOPWORDS.has(w));
   for (const w of added.filter((x) => !STOPWORDS.has(x))) {
-    const i = gone.findIndex((r) => levenshtein(w, r) <= Math.max(1, Math.floor(Math.max(w.length, r.length) / 3)));
+    // Words of 3 letters or fewer get no tolerance: PR→PN and TRV→TRP are different things.
+    const tolerance = (r) => (Math.max(w.length, r.length) <= 3 ? 0 : Math.max(1, Math.floor(Math.max(w.length, r.length) / 3)));
+    const i = gone.findIndex((r) => levenshtein(w, r) <= tolerance(r));
     if (i === -1) return true;
     gone.splice(i, 1);
   }
@@ -104,7 +106,7 @@ function lru(limit) {
  */
 export function createEditTracker({ limit = 1000 } = {}) {
   const answered = lru(limit); // id -> text that was answered
-  const inflight = lru(limit); // id -> text being answered
+  const inflight = lru(limit); // ids being answered (no text kept: it may hold an ID number)
   const pending = lru(limit); // id -> newest edit not yet answered
   const revoked = lru(limit);
   return {
@@ -127,9 +129,8 @@ export function createEditTracker({ limit = 1000 } = {}) {
     begin(id, text) {
       const edit = pending.get(id);
       pending.delete(id);
-      const t = edit ?? text;
-      inflight.set(id, t);
-      return t;
+      inflight.set(id, true);
+      return edit ?? text;
     },
     finish(id, text) {
       inflight.delete(id);

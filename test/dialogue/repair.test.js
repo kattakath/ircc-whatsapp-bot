@@ -106,3 +106,27 @@ test("S32: 'start over' clears the last answer's sources", async () => {
   assert.match(r.sends.at(-1), /1\) Visit/);
   assert.deepEqual((await stateOf(h)).lastSources, []);
 });
+
+test("advisor: a reset's remainder goes through the same gate — 'never mind, thanks' never reaches RAG", async () => {
+  for (const msg of ["never mind, thanks", "forget it, bye"]) {
+    const h = makeHarness();
+    await h.turn("hi");
+    await h.turn("What is the fee for a work permit?");
+    const before = h.calls.synthesize.length;
+    await h.turn(msg);
+    assert.equal(h.calls.synthesize.length, before, msg);
+  }
+});
+
+test("S29: a bare 'no' to 'continue or stop?' asks again instead of wiping the intake", async () => {
+  const h = makeHarness();
+  await intoPrIntake(h);
+  await h.turn("25");
+  await h.turn("How do I sponsor my mother?");
+  const r = await h.turn("no");
+  assert.match(r.sends.at(-1), /\*stop\*/);
+  assert.match(r.sends.at(-1), /\*continue\*/);
+  assert.equal((await stateOf(h)).slots.age, 25, "the stored answer is kept");
+  const c = await h.turn("continue");
+  assert.match(c.sends.at(-1), /highest level of education/);
+});
