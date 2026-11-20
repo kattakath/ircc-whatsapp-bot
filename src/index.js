@@ -7,6 +7,7 @@ import pino from "pino";
 import { builder, pendingPromptText } from "./graph.js";
 import { mediaReply } from "./media.js";
 import { ANSWERED_ABOVE, createDedupe, isDedupeCandidate } from "./dedupe.js";
+import { FORWARDED_PREFACE, FRAUD_CHECK, forwardedAction } from "./gate.js";
 import { admit, classifyInbound, jidTag } from "./ingress.js";
 import { CAPTION_PREFACE, FILLER_TEXT, handleTurn } from "./turn.js";
 import { createHolder, createQueues, createSender } from "./outbox.js";
@@ -163,8 +164,8 @@ async function start() {
 
   // Only ever called for a sender admit() already let through (see messages.upsert).
   // The turn itself lives in src/turn.js so the offline harness can drive it.
-  function processMessage(jid, inbound, sendOptions, msg, { offline = false } = {}) {
-    const preface = [offline ? OFFLINE_PREFACE : null, inbound.captioned ? CAPTION_PREFACE : null].filter(Boolean).join("\n");
+  function processMessage(jid, inbound, sendOptions, msg, { offline = false, forwarded = false } = {}) {
+    const preface = [offline ? OFFLINE_PREFACE : null, forwarded ? FORWARDED_PREFACE : null, inbound.captioned ? CAPTION_PREFACE : null].filter(Boolean).join("\n");
     return handleTurn({
       jid,
       message: msg,
@@ -237,6 +238,14 @@ async function start() {
     }
     mediaStreak.delete(jid);
 
+    // FIX-39: a forwarded scam gets IRCC's fraud guidance, never a restatement or a search.
+    const fwd = forwardedAction(inbound);
+    if (fwd === "fraud") {
+      console.log(`[fraud-check] #${jidTag(jid)} forwarded scam-like text; not processed`);
+      await sender.send(jid, { text: FRAUD_CHECK }, { ...sendOptions, quoted: msg });
+      return;
+    }
+
     // FIX-38: the same free-text question again within 10 min, already answered → one line
     // quoting that answer instead of a second RAG turn. Never mid-intake (that is a slot answer).
     let midIntake = false;
@@ -253,7 +262,7 @@ async function start() {
       return;
     }
     if (dedupeKey) dedupe.start(dedupeKey);
-    const result = await processMessage(jid, inbound, sendOptions, msg, { offline });
+    const result = await processMessage(jid, inbound, sendOptions, msg, { offline, forwarded: fwd === "forwarded" });
     if (dedupeKey) (result?.reply ? dedupe.finish(dedupeKey, result.sent) : dedupe.fail(dedupeKey));
   }
 
