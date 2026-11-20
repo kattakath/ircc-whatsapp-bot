@@ -278,10 +278,21 @@ function looksLikeRealQuestion(text) {
 // the already-slow synthesis call).
 const GRADE_THRESHOLD = 0.6;
 
+// Lay wording for lost status ("my status expired", "I overstayed") retrieved only general visitor
+// pages, while "how do I restore my status" ranked IRCC's restoration pages first (measured
+// 2026-11-20). Lexical query expansion (a standard IR technique) adds the official terms to the
+// RETRIEVAL query only; the model still answers the user's own words. None of the 44 eval
+// questions match, so their retrieval is unchanged.
+const LOST_STATUS_RE = /\b(?:overstay(?:ed|ing)?|out of status|lost (?:my |our |his |her |their )?status|status (?:has |had |is |was )?(?:expired|ended|run out|ran out)|expired (?:status|visa|permit|study permit|work permit|visitor record)|(?:visa|permit|visitor record) (?:has |had |is |was )?(?:expired|ended))\b/i;
+const RESTORATION_TERMS = "restore status restoration 90 days";
+export function expandRetrievalQuery(question) {
+  return LOST_STATUS_RE.test(question ?? "") ? `${question} ${RESTORATION_TERMS}` : question;
+}
+
 function makeAnswerFreeform({ retrieve, topSimilarity, synthesize, webFallback, persistWebFallback }) {
   // `retrievalQuery` (FIX-07): what goes to AI Search and Serper. Defaults to the question;
   // the intake summary passes a generic query so the user's profile only reaches the LOCAL model.
-  return async function answerFreeform(question, sources = null, { retrievalQuery = question, tier = "short", after = null } = {}) {
+  return async function answerFreeform(question, sources = null, { retrievalQuery = expandRetrievalQuery(question), tier = "short", after = null } = {}) {
   let chunks = await retrieve(retrievalQuery, { sources });
   const gradedWell = topSimilarity(chunks) >= GRADE_THRESHOLD;
 
