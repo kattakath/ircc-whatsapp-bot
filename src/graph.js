@@ -4,6 +4,7 @@ import { PostgresSaver } from "@langchain/langgraph-checkpoint-postgres";
 import { retrieve, topSimilarity } from "./db.js";
 import { LOST_STATUS_RE, isHighStakes, synthesize } from "./llm.js";
 import { isMoreRequest, layoutAnswer, nextChunk } from "./layout.js";
+import { clarificationFor, resolveClarification } from "./clarify.js";
 import { webFallback, persistWebFallback } from "./websearch.js";
 import { renderAnswer } from "./render.js";
 import { SOURCES_NONE, classifyAct, isComplaintWithContent, isShortQuestion } from "./gate.js";
@@ -357,6 +358,10 @@ const State = Annotation.Root({
   answerRemainder: Annotation({ default: () => null }),
   disclaimerAt: Annotation({ default: () => 0 }),
   hintShownAt: Annotation({ default: () => 0 }),
+  // FIX-19: a clarifying question just asked ({ kind, key?, program? }); `clarifyNow` is the one
+  // the CURRENT message may answer — menuNode moves it over and clears it, so it binds only once.
+  pendingClarify: Annotation({ default: () => null }),
+  clarifyNow: Annotation({ default: () => null }),
 });
 
 // No yes/no framing ("...do you?") — a closed question invites a
@@ -442,7 +447,33 @@ function menuNode(state) {
           : state.pendingMessage
         : MENU_TEXT
   );
-  return { incomingText: text, pendingMessage: null, bareReply: false, started: true, ...(showHint ? { hintShownAt: Date.now() } : {}) };
+  return {
+    incomingText: text,
+    pendingMessage: null,
+    bareReply: false,
+    started: true,
+    clarifyNow: state.pendingClarify ?? null,
+    pendingClarify: null,
+    ...(showHint ? { hintShownAt: Date.now() } : {}),
+  };
+}
+
+// FIX-19 (S37, S47): ONE clarifying question for a bare ambiguous topic or a delay story. Instant
+// (no search); a first message also gets the identity line.
+function clarifyNode(state) {
+  const c = clarificationFor(state.incomingText ?? "");
+  const question = c?.question ?? "Could you tell me a bit more about what you'd like to know?";
+  const { question: _q, ...clarify } = c ?? {};
+  return {
+    pendingMessage: state.hasGreeted ? question : `${INTRO_LINE}\n\n${question}`,
+    bareReply: true,
+    hasGreeted: true,
+    pendingClarify: c ? clarify : null,
+  };
+}
+// The reply to a clarifying question becomes the question it stands for.
+function clarifyAnswerNode(state) {
+  return { incomingText: resolveClarification(state.clarifyNow, state.incomingText ?? ""), clarifyNow: null };
 }
 
 // FIX-18 (S35): "more" sends the stored overflow of the last long answer; no new search.
@@ -686,6 +717,7 @@ function routeFromStart(state) {
   // there, which is a reasonable, honest response either way.
   if (/^\d$/.test(normalizeChoice(text))) return routeFromMenu(state);
   if (isMoreRequest(text)) return "more";
+  if (clarificationFor(text)) return "clarify";
   if (classifyAct(text)) return "smallTalk";
   if (looksLikeRealQuestion(text)) return "quickAnswer";
   return "menu";
@@ -697,11 +729,13 @@ function routeFromStart(state) {
 function routeFromMenu(state) {
   const text = (state.incomingText ?? "").trim();
   if (isResetCommand(text)) return "reset";
+  if (resolveClarification(state.clarifyNow, text)) return "clarifyAnswer"; // binds before menu digits
   const choice = normalizeChoice(text); // "1.", "one", "2!" are choices too (S16)
   if (choice === "1") return "tempPrompt";
   if (choice === "2") return "settlePrompt";
   if (choice === "3") return "freeformPrompt";
   if (isMoreRequest(text)) return "more";
+  if (clarificationFor(text)) return "clarify";
   if (classifyAct(text)) return "smallTalk";
   return "quickAnswer";
 }
@@ -743,6 +777,7 @@ function routeFromRoot(state) {
   if (state.hasGreeted) return "entry";
   // A brand-new chat: answer a real opening question now (FIX-02); greet anything else.
   const text = state.incomingText ?? "";
+  if (clarificationFor(text)) return "clarify"; // with the identity line (S47)
   if (classifyAct(text)) return "smallTalk";
   return looksLikeRealQuestion(text) && !isResetCommand(text) ? "quickAnswer" : "greeting";
 }
@@ -757,6 +792,8 @@ function buildGraph(overrides = {}) {
   .addNode("menu", menuNode)
   .addNode("smallTalk", smallTalkNode)
   .addNode("more", moreNode)
+  .addNode("clarify", clarifyNode)
+  .addNode("clarifyAnswer", clarifyAnswerNode)
   .addNode("quickAnswer", quickAnswerNode(answerFreeform), { retryPolicy: retryPolicy ?? RAG_RETRY })
   .addNode("tempPrompt", tempPromptNode)
   .addNode("settlePrompt", settlePromptNode)
@@ -772,6 +809,7 @@ function buildGraph(overrides = {}) {
   .addNode("slotEdit", slotEditNode)
 
   .addConditionalEdges(START, routeFromRoot, {
+    clarify: "clarify",
     greeting: "greeting",
     entry: "entry",
     quickAnswer: "quickAnswer",
@@ -783,6 +821,7 @@ function buildGraph(overrides = {}) {
     smallTalk: "smallTalk",
     menu: "menu",
     more: "more",
+    clarify: "clarify",
     reset: "reset",
     tempPrompt: "tempPrompt",
     settlePrompt: "settlePrompt",
@@ -796,10 +835,14 @@ function buildGraph(overrides = {}) {
     quickAnswer: "quickAnswer",
     smallTalk: "smallTalk",
     more: "more",
+    clarify: "clarify",
+    clarifyAnswer: "clarifyAnswer",
   })
   .addConditionalEdges("reset", routeFromReset, { menu: "menu", quickAnswer: "quickAnswer", smallTalk: "smallTalk" })
   .addEdge("smallTalk", "menu")
   .addEdge("more", "menu")
+  .addEdge("clarify", "menu")
+  .addEdge("clarifyAnswer", "quickAnswer")
   .addEdge("quickAnswer", "menu")
 
   .addConditionalEdges("tempPrompt", routeFromTempPrompt, {

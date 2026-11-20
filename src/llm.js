@@ -107,9 +107,8 @@ export async function synthesize(question, chunks) {
     }
     return (
       "I don't have official IRCC content covering that specific question yet, " +
-      "so I don't want to guess. Try rephrasing, or ask something about " +
-      "citizenship, Express Entry/PR, study permits, work permits, or visiting Canada " +
-      "— and I can also fetch a specific IRCC page if you tell me the exact topic."
+      "so I don't want to guess. Try asking it another way, with the program name " +
+      "(for example: study permit, work permit, visitor visa, Express Entry or citizenship)."
     );
   }
 
