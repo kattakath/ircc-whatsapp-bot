@@ -84,7 +84,13 @@ export async function handleTurn({ jid, text, graph, send, presence, preface = n
     const result = await graph.invoke(input, config);
 
     const graphReply = result.__interrupt__?.[0]?.value;
-    if (!graphReply) {
+    // "" is a deliberate silence (FIX-09: a bare 👍 earns no reply); only a missing reply is an error.
+    if (graphReply === "") {
+      failures.delete(jid);
+      answered = true;
+      return { reply: "" };
+    }
+    if (graphReply == null) {
       // The graph always loops back to a node that interrupts; don't leave the user hanging if it ever doesn't.
       // No state dump in the message: it would carry the user's text into the log.
       throw new Error(`Graph returned no interrupt to reply with (keys: ${Object.keys(result ?? {}).join(",")})`);

@@ -4,6 +4,7 @@ import { retrieve, topSimilarity } from "./db.js";
 import { synthesize } from "./llm.js";
 import { webFallback, persistWebFallback } from "./websearch.js";
 import { renderAnswer } from "./render.js";
+import { classifyAct, isShortQuestion } from "./gate.js";
 
 // Everything that leaves the process (retrieval, web fallback, the LLM). buildGraph(deps)
 // takes overrides so the offline dialogue harness (test/dialogue/) runs with stubs:
@@ -233,7 +234,10 @@ const BRANCH_RETRIEVAL_QUERY = {
 };
 
 function looksLikeRealQuestion(text) {
-  return text.trim().length > 12;
+  // FIX-09: short questions and acronyms ("PGWP?", "eTA") are questions too; non-questions
+  // never get here (classifyAct runs first at menu level).
+  const t = text.trim();
+  return t.length > 12 || isShortQuestion(t);
 }
 
 // CRAG-style grading, simplified: real CRAG grades each doc via an LLM into
@@ -307,6 +311,8 @@ const State = Annotation.Root({
   // it — this is specifically the very first message on this thread ever,
   // not "the start of the current conversation".
   hasGreeted: Annotation({ default: () => false }),
+  // FIX-09: the next menu interrupt sends pendingMessage as-is (no menu reminder); "" = silence.
+  bareReply: Annotation({ default: () => false }),
 });
 
 // No yes/no framing ("...do you?") — a closed question invites a
@@ -341,9 +347,19 @@ function greetingNode() {
 
 function menuNode(state) {
   const text = interrupt(
-    state.pendingMessage ? `${state.pendingMessage}\n\n${MENU_SHORT_REMINDER}` : MENU_TEXT
+    state.bareReply
+      ? (state.pendingMessage ?? "")
+      : state.pendingMessage
+        ? `${state.pendingMessage}\n\n${MENU_SHORT_REMINDER}`
+        : MENU_TEXT
   );
-  return { incomingText: text, pendingMessage: null, started: true };
+  return { incomingText: text, pendingMessage: null, bareReply: false, started: true };
+}
+
+// FIX-09: an instant fixed reply (or silence) for a recognised dialogue act; no retrieval, no LLM.
+function smallTalkNode(state) {
+  const act = classifyAct(state.incomingText ?? "");
+  return { pendingMessage: act?.reply ?? "", bareReply: true, hasGreeted: true };
 }
 
 // FIX-02: a chat that OPENS with a real question gets the answer at once, introduced by one
@@ -451,7 +467,8 @@ function routeFromStart(state) {
   // showing the menu from scratch. Delegates to routeFromMenu's own
   // top-level (1-3) matching; anything else falls through to quickAnswer
   // there, which is a reasonable, honest response either way.
-  if (/^\d$/.test(text)) return routeFromMenu(state);
+  if (/^\d$/.test(normalizeChoice(text))) return routeFromMenu(state);
+  if (classifyAct(text)) return "smallTalk";
   if (looksLikeRealQuestion(text)) return "quickAnswer";
   return "menu";
 }
@@ -462,9 +479,11 @@ function routeFromStart(state) {
 function routeFromMenu(state) {
   const text = (state.incomingText ?? "").trim();
   if (isResetCommand(text)) return "reset";
-  if (text === "1") return "tempPrompt";
-  if (text === "2") return "settlePrompt";
-  if (text === "3") return "freeformPrompt";
+  const choice = normalizeChoice(text); // "1.", "one", "2!" are choices too (S16)
+  if (choice === "1") return "tempPrompt";
+  if (choice === "2") return "settlePrompt";
+  if (choice === "3") return "freeformPrompt";
+  if (classifyAct(text)) return "smallTalk";
   return "quickAnswer";
 }
 
@@ -472,6 +491,7 @@ function routeFromTempPrompt(state) {
   const text = (state.incomingText ?? "").trim();
   if (isResetCommand(text)) return "reset";
   if (TOPIC_BRANCHES[text]) return "setTopicBranch"; // already translated to the original 1-3 key
+  if (classifyAct(text)) return "smallTalk";
   return "quickAnswer";
 }
 
@@ -479,6 +499,7 @@ function routeFromSettlePrompt(state) {
   const text = (state.incomingText ?? "").trim();
   if (isResetCommand(text)) return "reset";
   if (BRANCH_SLOTS[text]) return "setSlotBranch"; // already translated to the original 4/5 key
+  if (classifyAct(text)) return "smallTalk";
   return "quickAnswer";
 }
 
@@ -503,6 +524,7 @@ function routeFromRoot(state) {
   if (state.hasGreeted) return "entry";
   // A brand-new chat: answer a real opening question now (FIX-02); greet anything else.
   const text = state.incomingText ?? "";
+  if (classifyAct(text)) return "smallTalk";
   return looksLikeRealQuestion(text) && !isResetCommand(text) ? "quickAnswer" : "greeting";
 }
 
@@ -514,6 +536,7 @@ function buildGraph(overrides = {}) {
   .addNode("entry", entryNode)
   .addNode("reset", resetNode)
   .addNode("menu", menuNode)
+  .addNode("smallTalk", smallTalkNode)
   .addNode("quickAnswer", quickAnswerNode(answerFreeform), { retryPolicy: retryPolicy ?? RAG_RETRY })
   .addNode("tempPrompt", tempPromptNode)
   .addNode("settlePrompt", settlePromptNode)
@@ -530,10 +553,12 @@ function buildGraph(overrides = {}) {
     greeting: "greeting",
     entry: "entry",
     quickAnswer: "quickAnswer",
+    smallTalk: "smallTalk",
   })
   .addEdge("greeting", "entry")
   .addConditionalEdges("entry", routeFromStart, {
     quickAnswer: "quickAnswer",
+    smallTalk: "smallTalk",
     menu: "menu",
     reset: "reset",
     tempPrompt: "tempPrompt",
@@ -546,19 +571,23 @@ function buildGraph(overrides = {}) {
     settlePrompt: "settlePrompt",
     freeformPrompt: "freeformPrompt",
     quickAnswer: "quickAnswer",
+    smallTalk: "smallTalk",
   })
   .addEdge("reset", "menu")
+  .addEdge("smallTalk", "menu")
   .addEdge("quickAnswer", "menu")
 
   .addConditionalEdges("tempPrompt", routeFromTempPrompt, {
     reset: "reset",
     setTopicBranch: "setTopicBranch",
     quickAnswer: "quickAnswer",
+    smallTalk: "smallTalk",
   })
   .addConditionalEdges("settlePrompt", routeFromSettlePrompt, {
     reset: "reset",
     setSlotBranch: "setSlotBranch",
     quickAnswer: "quickAnswer",
+    smallTalk: "smallTalk",
   })
 
   .addEdge("setTopicBranch", "topicPrompt")

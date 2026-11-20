@@ -108,7 +108,7 @@ test("S02 (FIX-02): a greeting gets the identity line and the menu, no RAG, no '
   assert.ok(!/official IRCC website/.test(r.sends[0]));
 });
 
-test("FIX-09: a bare 'thanks' does not trigger retrieval and the LLM", { todo: "FIX-09" }, async () => {
+test("FIX-09: a bare 'thanks' does not trigger retrieval and the LLM", async () => {
   const h = makeHarness();
   await h.turn("hi");
   await h.turn("How do I renew my PR card?");
@@ -268,5 +268,70 @@ test("S13: the intake profile reaches the local model but never the search queri
   assert.match(summary, /34/, "the local synthesis input carries the profile");
   for (const { question } of [...h.calls.retrieve, ...h.calls.webFallback.map((q) => ({ question: q }))]) {
     assert.ok(!/\b34\b|\bage\b|My profile/i.test(question), `search query carries the profile: ${question}`);
+  }
+});
+
+// --- FIX-09: pre-router dialogue-act gate ----------------------------------------------
+
+import { REPLIES } from "../../src/gate.js";
+
+async function afterAnswer() {
+  const h = makeHarness();
+  await h.turn("hi");
+  await h.turn("What is a PGWP?");
+  return h;
+}
+
+test("S17: closings, acks and noise after an answer are instant and never reach RAG", async () => {
+  const h = await afterAnswer();
+  const before = h.calls.retrieve.length;
+  assert.deepEqual((await h.turn("thanks 🙏")).sends, [REPLIES.closing]);
+  assert.deepEqual((await h.turn("👍")).sends, [], "an ack earns silence");
+  assert.deepEqual((await h.turn("asdfgh")).sends, [REPLIES.noise]);
+  assert.equal(h.calls.retrieve.length, before);
+});
+
+test("S17: a short acronym question still reaches RAG", async () => {
+  const h = await afterAnswer();
+  const before = h.calls.retrieve.length;
+  await h.turn("PGWP?");
+  assert.equal(h.calls.retrieve.length, before + 1);
+});
+
+test("S44: identity, handoff and file questions get fixed replies with official links, no RAG", async () => {
+  const h = makeHarness();
+  await h.turn("hi");
+  assert.deepEqual((await h.turn("are you IRCC?")).sends, [REPLIES.identity]);
+  assert.deepEqual((await h.turn("can I talk to someone? please call me")).sends, [REPLIES.handoff]);
+  assert.deepEqual((await h.turn("can you check my file")).sends, [REPLIES.fileCheck]);
+  assert.equal(h.calls.retrieve.length, 0);
+  assert.match(REPLIES.identity, /not IRCC and not a person/);
+  assert.match(REPLIES.handoff, /canada\.ca\/.+contact-ircc/);
+});
+
+test("S16: '1.', 'one' and '2!' at the menu are choices, not questions", async () => {
+  for (const [reply, want] of [["1.", /Visit/], ["one", /Visit/], ["2!", /Settle permanently/]]) {
+    const h = makeHarness();
+    await h.turn("hi");
+    const r = await h.turn(reply);
+    assert.match(r.sends[0], want, reply);
+    assert.equal(h.calls.retrieve.length, 0, reply);
+  }
+});
+
+test("FIX-09 guard: real questions that LOOK like small talk still reach RAG", async () => {
+  for (const q of [
+    "Thanks, but how do I apply for a study permit?",
+    "sorry, what is the fee for a PR card?",
+    "Are you sure the biometrics fee is $85?",
+    "can you check my eligibility for express entry?",
+    "ok and what about my wife's open work permit?",
+    "wait, do I need a medical exam for a visitor visa?",
+    "no I meant the citizenship test, how many questions?",
+  ]) {
+    const h = makeHarness();
+    await h.turn("hi");
+    await h.turn(q);
+    assert.equal(h.calls.retrieve.length, 1, `"${q}" was swallowed by the gate`);
   }
 });
