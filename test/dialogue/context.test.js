@@ -72,3 +72,14 @@ test("needsRewrite (C13): short, repair marker, or a pronoun with no programme",
   assert.equal(needsRewrite("and for my wife?", []), false, "no context, no rewrite");
   assert.equal(needsRewrite("and for my wife?", [{ q: "x", at: Date.now() - 5 * 3600 * 1000 }]), false, "context older than 4 h");
 });
+
+test("the rewrite prompt anchors the follow-up to the LATEST question (live: two equal-weight questions were merged)", async () => {
+  const { rewriteMessages } = await import("../../src/llm.js");
+  const [sys, user] = rewriteMessages("and for my wife?", ["What is the fee for a work permit?", "What is the fee for a study permit?"]);
+  assert.match(sys.content, /continues the LATEST question/);
+  assert.match(sys.content, /never expand them/);
+  assert.match(user.content, /Earlier question \(background only\): What is the fee for a work permit\?/);
+  assert.match(user.content, /Latest question: What is the fee for a study permit\?\nFollow-up: and for my wife\?/);
+  const [, one] = rewriteMessages("how many hours?", ["Can I work while studying?"]);
+  assert.doesNotMatch(one.content, /Earlier question/);
+});

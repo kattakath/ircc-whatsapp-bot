@@ -95,19 +95,29 @@ const HIGH_STAKES_NOTE =
 // low reasoning effort, as measured. The rewrite also drops personal details, so it is the safe
 // search query too (P15). A hard timeout; graph.js falls back to the user's own words.
 const REWRITE_TIMEOUT_MS = Number(process.env.REWRITE_TIMEOUT_MS ?? 8_000);
+// A/B on the live model (2026-11-20): with the two previous questions given equal weight, the
+// rewrite merged them ("and for my wife?" → fees for a work permit AND a study permit; seen live
+// too), anchoring to the latest question 1/3; marking the latest as the one followed up anchored
+// 6/6, and "never expand" stopped an invented "Social Work Open Work Permit" for SOWP.
 const REWRITE_SYSTEM =
-  "Rewrite the user's follow-up as ONE standalone question about Canadian immigration, using the " +
-  "previous questions for context. Drop names, ages, ID numbers and other personal details. " +
-  "Reply with the question only.";
+  "Rewrite the user's follow-up as ONE standalone question about Canadian immigration. The follow-up " +
+  "continues the LATEST question; the earlier question is background only — do not merge it in unless " +
+  "the follow-up names it. Keep abbreviations (PGWP, SOWP, LMIA…) exactly as written; never expand them. " +
+  "Drop names, ages, ID numbers and other personal details. Reply with the question only.";
+/** The rewrite prompt: [system, user]. `previous` is oldest first; the last one is followed up. */
+export function rewriteMessages(question, previous = []) {
+  const earlier = previous.length > 1 ? `Earlier question (background only): ${previous.at(-2)}\n` : "";
+  return [
+    { role: "system", content: REWRITE_SYSTEM },
+    { role: "user", content: `${earlier}Latest question: ${previous.at(-1) ?? ""}\nFollow-up: ${question}` },
+  ];
+}
 export async function rewrite(question, previous = []) {
   const response = await client.chat.completions.create(
     {
       model: MODEL,
       reasoning_effort: "low",
-      messages: [
-        { role: "system", content: REWRITE_SYSTEM },
-        { role: "user", content: `Previous questions:\n${previous.map((p) => `- ${p}`).join("\n")}\nFollow-up: ${question}` },
-      ],
+      messages: rewriteMessages(question, previous),
     },
     { timeout: REWRITE_TIMEOUT_MS }
   );
