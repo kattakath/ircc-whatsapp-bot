@@ -4,6 +4,21 @@ import { persistChunk } from "./db.js";
 const SERPER_API_KEY = process.env.SERPER_API_KEY;
 const SITE_SCOPE = "site:canada.ca/en/immigration-refugees-citizenship";
 
+// FIX-06: the ONLY pages the fallback may read or persist. An exact hostname, not a suffix
+// test (`evil-canada.ca`, `canada.ca.example.com`), plus the IRCC path prefix; checked on
+// the search result AND on the final URL after redirects, before parsing or persisting.
+const ALLOWED_HOST = "www.canada.ca";
+const ALLOWED_PATH_PREFIX = "/en/immigration-refugees-citizenship/";
+export function isAllowedUrl(u) {
+  let url;
+  try {
+    url = new URL(u);
+  } catch {
+    return false;
+  }
+  return url.protocol === "https:" && url.hostname === ALLOWED_HOST && url.pathname.startsWith(ALLOWED_PATH_PREFIX);
+}
+
 // CRAG's web-search fallback exists to avoid the LLM hallucinating from
 // parametric knowledge when local retrieval is weak — it substitutes
 // ungrounded generation with a *different authoritative source*, not with
@@ -18,14 +33,15 @@ async function search(question) {
       "X-API-KEY": SERPER_API_KEY,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ q: `${question} ${SITE_SCOPE}` }),
+    // site: FIRST, so a long question cannot push the scope out of the query (S11).
+    body: JSON.stringify({ q: `${SITE_SCOPE} ${question}` }),
     signal: AbortSignal.timeout(15_000), // per-call deadline (FIX-03)
   });
   if (!res.ok) {
     throw new Error(`Serper search failed: ${res.status} ${await res.text()}`);
   }
   const data = await res.json();
-  return (data.organic ?? []).slice(0, 2);
+  return (data.organic ?? []).filter((r) => isAllowedUrl(r.link)).slice(0, 2);
 }
 
 async function fetchPageText(url) {
@@ -34,6 +50,8 @@ async function fetchPageText(url) {
     signal: AbortSignal.timeout(15_000), // per-call deadline (FIX-03)
   });
   if (!res.ok) return null;
+  // A canada.ca URL can redirect anywhere: judge where we actually landed (S55).
+  if (!isAllowedUrl(res.url || url)) return null;
   const html = await res.text();
   const $ = cheerio.load(html);
   $("nav, footer, script, style, noscript, svg, header").remove();
@@ -101,6 +119,8 @@ export async function webFallback(question) {
  */
 export async function persistWebFallback(chunks) {
   for (const chunk of chunks) {
+    // Defence in depth: never write an off-allowlist page into the corpus, where it would count as official.
+    if (!isAllowedUrl(chunk.metadata?.url)) continue;
     try {
       await persistChunk(chunk.content, {
         url: chunk.metadata.url,
