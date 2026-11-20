@@ -4,7 +4,7 @@ import { retrieve, topSimilarity } from "./db.js";
 import { synthesize } from "./llm.js";
 import { webFallback, persistWebFallback } from "./websearch.js";
 import { renderAnswer } from "./render.js";
-import { classifyAct, isShortQuestion } from "./gate.js";
+import { SOURCES_NONE, classifyAct, isComplaintWithContent, isShortQuestion } from "./gate.js";
 
 // Everything that leaves the process (retrieval, web fallback, the LLM). buildGraph(deps)
 // takes overrides so the offline dialogue harness (test/dialogue/) runs with stubs:
@@ -283,7 +283,9 @@ function makeAnswerFreeform({ retrieve, topSimilarity, synthesize, webFallback, 
   }
 
   // FIX-04: code, not the model, owns WhatsApp formatting and the source links.
-  return renderAnswer(await synthesize(question, chunks), chunks).text;
+  // FIX-22: the sources travel with the text, so "show me the page" can answer from them.
+  const { text, sources: shownSources } = renderAnswer(await synthesize(question, chunks), chunks);
+  return { text, sources: shownSources };
   };
 }
 
@@ -313,6 +315,8 @@ const State = Annotation.Root({
   hasGreeted: Annotation({ default: () => false }),
   // FIX-09: the next menu interrupt sends pendingMessage as-is (no menu reminder); "" = silence.
   bareReply: Annotation({ default: () => false }),
+  // FIX-22: the canada.ca pages behind the last answer, for "show me the page".
+  lastSources: Annotation({ default: () => [] }),
 });
 
 // No yes/no framing ("...do you?") — a closed question invites a
@@ -359,6 +363,12 @@ function menuNode(state) {
 // FIX-09: an instant fixed reply (or silence) for a recognised dialogue act; no retrieval, no LLM.
 function smallTalkNode(state) {
   const act = classifyAct(state.incomingText ?? "");
+  // FIX-22: "show me the page" answers from the last answer's sources, never from a new search.
+  if (act?.kind === "sources") {
+    const urls = state.lastSources ?? [];
+    const reply = urls.length ? `Here's the official page I used:\n${urls.map((u) => `🔗 ${u}`).join("\n")}` : SOURCES_NONE;
+    return { pendingMessage: reply, bareReply: true, hasGreeted: true };
+  }
   return { pendingMessage: act?.reply ?? "", bareReply: true, hasGreeted: true };
 }
 
@@ -368,9 +378,11 @@ function smallTalkNode(state) {
 const INTRO_LINE = "👋🏽 I'm Izzy's Minion 🤓, a helper bot (not IRCC, not a person). I answer from public canada.ca pages.";
 
 const quickAnswerNode = (answerFreeform) => async function quickAnswerNode(state) {
-  const answer = await answerFreeform(state.incomingText);
+  const { text: raw, sources: lastSources } = await answerFreeform(state.incomingText);
+  // FIX-22 (C14): a complaint that still carries content is answered, opening with an apology.
+  const answer = isComplaintWithContent(state.incomingText) ? `Sorry about that — ${raw}` : raw;
   const pendingMessage = state.hasGreeted ? answer : `${INTRO_LINE}\n\n${answer}`;
-  return { pendingMessage, hasGreeted: true };
+  return { pendingMessage, hasGreeted: true, lastSources };
 };
 
 function topicPromptNode(state) {
@@ -381,8 +393,8 @@ function topicPromptNode(state) {
 
 const topicAnswerNode = (answerFreeform) => async function topicAnswerNode(state) {
   const branch = TOPIC_BRANCHES[state.branch];
-  const answer = await answerFreeform(state.incomingText, branch.sources);
-  return { pendingMessage: answer, branch: null };
+  const { text: answer, sources: lastSources } = await answerFreeform(state.incomingText, branch.sources);
+  return { pendingMessage: answer, branch: null, lastSources };
 };
 
 function freeformPromptNode(state) {
@@ -410,8 +422,8 @@ function settlePromptNode() {
 }
 
 const freeformAnswerNode = (answerFreeform) => async function freeformAnswerNode(state) {
-  const answer = await answerFreeform(state.incomingText);
-  return { pendingMessage: answer };
+  const { text: answer, sources: lastSources } = await answerFreeform(state.incomingText);
+  return { pendingMessage: answer, lastSources };
 };
 
 const slotFillNode = (answerFreeform) => async function slotFillNode(state) {
@@ -431,8 +443,8 @@ const slotFillNode = (answerFreeform) => async function slotFillNode(state) {
   }
   if (parsed === null) {
     if (looksLikeRealQuestion(text) && !/^[0-9]+$/.test(text.trim())) {
-      const answer = await answerFreeform(text);
-      return { pendingMessage: `${answer}\n\nWhenever you're ready, back to the last question:` };
+      const { text: answer, sources: lastSources } = await answerFreeform(text);
+      return { pendingMessage: `${answer}\n\nWhenever you're ready, back to the last question:`, lastSources };
     }
     return { pendingMessage: "Sorry, I didn't quite catch that." };
   }
@@ -451,10 +463,10 @@ const slotSynthesisNode = (answerFreeform) => async function slotSynthesisNode(s
     `My profile: ${profileLine}. Based on official IRCC eligibility criteria, ` +
     `roughly how does this look, and what should I consider next? ` +
     `Be clear this is a rough, informal read — not an official score.`;
-  const answer = await answerFreeform(composedQuestion, BRANCH_SOURCES[state.branch], {
+  const { text: answer, sources: lastSources } = await answerFreeform(composedQuestion, BRANCH_SOURCES[state.branch], {
     retrievalQuery: BRANCH_RETRIEVAL_QUERY[state.branch],
   });
-  return { pendingMessage: answer, branch: null, slotIndex: 0, slots: CLEAR_SLOTS };
+  return { pendingMessage: answer, branch: null, slotIndex: 0, slots: CLEAR_SLOTS, lastSources };
 };
 
 // --- routing -------------------------------------------------------------

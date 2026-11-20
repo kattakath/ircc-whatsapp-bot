@@ -18,7 +18,12 @@ export const REPLIES = {
   prod: `I'm here 🙂 ${MENU_HINT}`,
   noise: `Sorry, I didn't catch that. ${MENU_HINT}`,
   hold: "No problem 🙂 Ask whenever you're ready.",
-  complaint: "Sorry about that. Tell me what you meant, and I'll try again.",
+  // FIX-22 (S18): options and an explanation, the repairs users prefer (Ashktorab et al. CHI 2019).
+  complaint:
+    "Sorry about that. You can:\n" +
+    "• ask it another way, and I'll look again\n" +
+    "• reply *source* to see the official page I used\n" +
+    `• check with a licensed consultant or lawyer: ${REPRESENTATIVE_URL}`,
   identity:
     "I'm a helper bot, not IRCC and not a person. I read public canada.ca pages and can't see anyone's files or applications.\n" +
     `To reach IRCC itself: ${CONTACT_URL}`,
@@ -46,6 +51,18 @@ const ACK_SET = new Set(["ok", "okay", "k", "kk", "cool", "great", "nice", "alri
 const PROD_RE = /^(?:(?:hello|hi|hey|helo|hlo)[!?. ]*)?(?:\?+|are you there\??|anyone there\??|still there\??|u there\??|you there\??)$|^(?:hello|hi|hey|helo|hlo)\?{2,}/;
 const HOLD_RE = /^(?:sorry|wait|hold on|one sec|one second|never ?mind|nvm|my bad|oops|wrong number)\b/;
 const COMPLAINT_SET = new Set(["wrong", "that's wrong", "thats wrong", "that is wrong", "not correct", "incorrect", "no that's wrong", "no thats wrong", "👎"]);
+// FIX-22: "show me the page", "which page did you use", "source", "link".
+const SOURCES_RE = /^(?:(?:can you |pls |please )?(?:show|send|give)(?: me)? (?:the )?(?:page|link|source|sources|website)|(?:which|what) (?:page|link|source|website) (?:did you use|is that from|was that)|sources?|links?|the page|the link)[?!. ]*$/;
+const COMPLAINT_LEAD_RE = /^(?:no[,.! ]+)?(?:that'?s|thats|that is|it'?s|its)? ?(?:wrong|not right|incorrect|not correct)\b[,.!]*\s*/;
+export const SOURCES_NONE = "I don't have a page to show for that yet. Ask your question and I'll include the official link.";
+
+/** C14: a complaint that still has content after the complaint words ("no thats wrong, I asked for my mother"). */
+export function isComplaintWithContent(raw) {
+  const t = norm(raw ?? "");
+  const m = t.match(COMPLAINT_LEAD_RE);
+  return !!m && m[0].length > 0 && words(t.slice(m[0].length)).length >= 2;
+}
+
 const IDENTITY_RE = /\b(?:are|r) (?:you|u) (?:from |with )?(?:ircc|the government|government|a bot|bot|a robot|robot|human|a human|real|a real person|a person|ai|an ai)\b|\bwho (?:are|r) (?:you|u)\b/;
 const HANDOFF_RE = /\b(?:talk|speak|chat) (?:to|with) (?:someone|somebody|a person|a human|an agent|an officer|a real person)\b|\b(?:call|phone|ring) me\b|\bcan (?:you|u) call\b|\bhuman agent\b/;
 const FILE_RE = /\b(?:check|see|look at|look into|open|review) (?:my|our|his|her) (?:file|application|case|status)\b/;
@@ -57,6 +74,7 @@ const FILE_RE = /\b(?:check|see|look at|look into|open|review) (?:my|our|his|her
 export function classifyAct(raw) {
   const t = norm(raw ?? "");
   if (!t) return null;
+  if (SOURCES_RE.test(t)) return { kind: "sources", reply: null };
   if (IDENTITY_RE.test(t)) return { kind: "identity", reply: REPLIES.identity };
   if (HANDOFF_RE.test(t)) return { kind: "handoff", reply: REPLIES.handoff };
   if (FILE_RE.test(t)) return { kind: "fileCheck", reply: REPLIES.fileCheck };
