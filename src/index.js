@@ -77,21 +77,22 @@ async function start() {
 
   sock.ev.on("creds.update", saveCreds);
 
-  if (PAIR_PHONE_NUMBER && !state.creds.registered && !pairingCodeRequested) {
-    pairingCodeRequested = true;
-    // requestPairingCode sends over the raw socket immediately — it needs
-    // the underlying WebSocket to actually be open first, or it throws
-    // "Connection Closed" (428).
-    await sock.waitForSocketOpen();
-    const code = await sock.requestPairingCode(PAIR_PHONE_NUMBER);
-    console.log(
-      `\nOn the SPARE number: WhatsApp > Linked Devices > Link a Device > Link with phone number instead\n` +
-        `Enter this code: ${code}\n`
-    );
-  }
-
-  sock.ev.on("connection.update", (update) => {
+  sock.ev.on("connection.update", async (update) => {
     const { connection, lastDisconnect, qr } = update;
+
+    // Request the pairing code on the first `qr` event, never earlier: that
+    // event is the proof the login handshake finished. Sending it as soon as
+    // the WebSocket opened made WhatsApp drop the socket (428) about 2s later,
+    // before anyone could type the code (measured 2026-11-19, twice).
+    if (qr && PAIR_PHONE_NUMBER && !state.creds.registered && !pairingCodeRequested) {
+      pairingCodeRequested = true;
+      const code = await sock.requestPairingCode(PAIR_PHONE_NUMBER);
+      console.log(
+        `\nOn the SPARE number: WhatsApp > Linked Devices > Link a Device > Link with phone number instead\n` +
+          `Enter this code: ${code}\n`
+      );
+      return;
+    }
 
     if (qr && !PAIR_PHONE_NUMBER) {
       console.log("\nScan this QR code from the SPARE number: WhatsApp > Linked Devices > Link a Device\n");
@@ -114,13 +115,14 @@ async function start() {
     }
 
     if (PAIR_PHONE_NUMBER && !state.creds.registered) {
-      // Don't auto-retry while a pairing code is outstanding — that's what
-      // caused the runaway loop. Surface it and stop; rerun manually.
+      // A pairing code is outstanding. Reconnect (bounded, below) so a live
+      // socket is there when the code is typed in; the module-level
+      // `pairingCodeRequested` flag stops the reconnect from asking for a new
+      // code, which is what caused the old runaway loop.
       console.log(
-        `Connection closed (code ${statusCode}) before pairing completed. Not auto-reconnecting. ` +
-          `If you haven't entered the code yet, this process may already be dead — stop it and rerun.`
+        `Connection closed (code ${statusCode}: ${lastDisconnect?.error?.message ?? "no reason"}) ` +
+          `before pairing completed. The code shown above stays valid.`
       );
-      return;
     }
 
     reconnectAttempts += 1;
