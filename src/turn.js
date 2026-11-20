@@ -21,6 +21,10 @@ export const AGAIN_RE = /^\s*(?:(?:try|ask)\s+)?again\s*[.!?]*\s*$|^\s*retry\s*[
 // Last failed question per chat, in memory only (lost on restart by design: nothing extra
 // is persisted about the user).
 const lastFailed = new Map();
+
+// FIX-10: the last prompt the bot sent per chat ({id, sentAt}), for C15 choice binding
+// (a quoted or late digit must bind to the prompt it answers; FIX-15 reads this).
+export const lastPrompt = new Map();
 // FIX-05: a captioned photo/document is answered from its caption, and says so.
 export const CAPTION_PREFACE = "I can't open photos or files yet, so I'm answering from your caption.";
 export const FILLER_DELAY_MS = 4000;
@@ -41,7 +45,11 @@ export const STALE_MS = 7 * 24 * 60 * 60 * 1000;
  */
 // `preface` (e.g. CAPTION_PREFACE) goes above the reply; `sendOptions` (e.g. the chat's
 // ephemeralExpiration, FIX-05) rides on every message this turn sends.
-export async function handleTurn({ jid, text, graph, send, presence, preface = null, sendOptions, now = Date.now, logger = console, failures = lastFailed }) {
+// `message` is the inbound WAMessage (FIX-10): quoting needs the full message, not its text.
+// `newerInbound()` says whether the user has sent something since; if so the reply quotes the
+// question it answers, so a backlog never reads as answers to the wrong messages. Adjacent
+// replies stay unquoted (today's look). `prompts` records each sent prompt's id and time.
+export async function handleTurn({ jid, text, graph, send, presence, preface = null, sendOptions, message = null, newerInbound = () => false, prompts = lastPrompt, now = Date.now, logger = console, failures = lastFailed }) {
   const failed = failures.get(jid);
   // *again* after a failure re-asks the saved question (FIX-03, S03).
   const question = failed && AGAIN_RE.test(text) ? failed.question : text;
@@ -100,7 +108,9 @@ export async function handleTurn({ jid, text, graph, send, presence, preface = n
     const reply = preface ? `${preface}\n\n${graphReply}` : graphReply;
     answered = true; // before sending, so a filler racing the reply cannot follow it
     logger.log(`[out] #${jidTag(jid)} ${reply.length} chars`);
-    await send(jid, { text: reply }, sendOptions);
+    const replyOptions = message && newerInbound() ? { ...sendOptions, quoted: message } : sendOptions;
+    const sent = await send(jid, { text: reply }, replyOptions);
+    if (sent?.key?.id) prompts.set(jid, { id: sent.key.id, sentAt: now() });
     return { reply };
   } catch (err) {
     logger.error("Error handling message:", err);
