@@ -155,7 +155,13 @@ export function renderAnswer(markdown, chunks = []) {
   metrics.droppedUrls += dropped;
   if (zeroMarkers && chunks.length) metrics.zeroMarkerAnswers += 1;
 
-  const tidy = body.replace(/[ \t]+$/gm, "").replace(/\n{3,}/g, "\n\n").trim();
+  // [n] markers only pick the sources (above); the reader never sees them. A marker the model put
+  // on its own line ("[2]") would otherwise leave a stray line (seen live on gpt-oss:20b).
+  const tidy = body
+    .replace(/[ \t]*\[\d{1,2}\](?:[ \t]*\[\d{1,2}\])*/g, "")
+    .replace(/[ \t]+$/gm, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
   const text = sources.length ? `${tidy}\n\n${sources.map((u) => `🔗 ${u}`).join("\n")}` : tidy;
   return { text, sources, dropped, zeroMarkers };
 }

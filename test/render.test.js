@@ -53,3 +53,10 @@ test("S07: SYSTEM_PROMPT asks for plain Markdown, [n] citations and no URLs", ()
   assert.match(SYSTEM_PROMPT, /\[1\]/);
   assert.match(SYSTEM_PROMPT, /Do NOT write any URLs/);
 });
+
+test("[n] markers pick the sources but never show, even on their own line", () => {
+  const r = renderAnswer("You need 1,095 days [1][2].\n\nTime as a temporary resident counts half [2].\n\n[2]", [chunk(ETA, 0.9), chunk(VISIT, 0.8)]);
+  assert.ok(!/\[\d+\]/.test(r.text), r.text);
+  assert.deepEqual(r.sources, [ETA, VISIT]);
+  assert.match(r.text, /You need 1,095 days\.\n\nTime as a temporary resident counts half\.\n\n🔗 /);
+});
