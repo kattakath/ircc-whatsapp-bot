@@ -2,12 +2,14 @@
 //
 // Extracted from index.js's processMessage so the offline dialogue harness can drive a
 // real turn with fakes for every outbound channel (docs/conversation-design.md FIX-01,
-// layer L2): `send(jid, content)` and `presence(state, jid)` are the only ways out, and
+// layer L2): `send(jid, content, options)` and `presence(state, jid)` are the only ways out, and
 // the harness counts them per inbound message. Behaviour is unchanged from processMessage.
 import { Command } from "@langchain/langgraph";
 
 export const FILLER_TEXT = "One sec — checking the official IRCC info... 🍁";
 export const ERROR_TEXT = "Sorry, something went wrong on my end — try again in a moment.";
+// FIX-05: a captioned photo/document is answered from its caption, and says so.
+export const CAPTION_PREFACE = "I can't open photos or files yet, so I'm answering from your caption.";
 export const FILLER_DELAY_MS = 4000;
 export const PRESENCE_REFRESH_MS = 8000;
 // A conversation abandoned mid-intake for a week+ starts fresh instead of resuming stale
@@ -24,7 +26,9 @@ export const STALE_MS = 7 * 24 * 60 * 60 * 1000;
  * @param {() => number} [p.now]
  * @param {{log: Function, error: Function}} [p.logger]
  */
-export async function handleTurn({ jid, text, graph, send, presence, now = Date.now, logger = console }) {
+// `preface` (e.g. CAPTION_PREFACE) goes above the reply; `sendOptions` (e.g. the chat's
+// ephemeralExpiration, FIX-05) rides on every message this turn sends.
+export async function handleTurn({ jid, text, graph, send, presence, preface = null, sendOptions, now = Date.now, logger = console }) {
   logger.log(`[in]  ${jid}: ${text}`);
 
   let answered = false;
@@ -46,7 +50,7 @@ export async function handleTurn({ jid, text, graph, send, presence, now = Date.
     fillerTimer = setTimeout(async () => {
       if (answered) return; // avoid a filler landing just after the real reply
       try {
-        await send(jid, { text: FILLER_TEXT });
+        await send(jid, { text: FILLER_TEXT }, sendOptions);
       } catch (err) {
         logger.error("Failed to send slow-reply filler:", err);
       }
@@ -59,20 +63,21 @@ export async function handleTurn({ jid, text, graph, send, presence, now = Date.
     const input = isFreshThread || isStale ? { incomingText: text } : new Command({ resume: text });
     const result = await graph.invoke(input, config);
 
-    const reply = result.__interrupt__?.[0]?.value;
-    if (!reply) {
+    const graphReply = result.__interrupt__?.[0]?.value;
+    if (!graphReply) {
       // The graph always loops back to a node that interrupts; don't leave the user hanging if it ever doesn't.
       throw new Error(`Graph returned no interrupt to reply with: ${JSON.stringify(result)}`);
     }
 
+    const reply = preface ? `${preface}\n\n${graphReply}` : graphReply;
     answered = true; // before sending, so a filler racing the reply cannot follow it
     logger.log(`[out] ${jid}: ${reply.slice(0, 120)}${reply.length > 120 ? "..." : ""}`);
-    await send(jid, { text: reply });
+    await send(jid, { text: reply }, sendOptions);
     return { reply };
   } catch (err) {
     logger.error("Error handling message:", err);
     try {
-      await send(jid, { text: ERROR_TEXT });
+      await send(jid, { text: ERROR_TEXT }, sendOptions);
     } catch (sendErr) {
       logger.error("Also failed to send the error reply:", sendErr);
     }

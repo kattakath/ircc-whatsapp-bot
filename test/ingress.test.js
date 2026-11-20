@@ -7,10 +7,11 @@ import { admit, classifyInbound, jidTag } from "../src/ingress.js";
 const noSleep = async () => {};
 
 test("classifyInbound: typed text, captionless media, and everything else", () => {
-  assert.deepEqual(classifyInbound({ conversation: "What is a study permit?" }), { kind: "text", text: "What is a study permit?" });
-  assert.deepEqual(classifyInbound({ extendedTextMessage: { text: "hi there" } }), { kind: "text", text: "hi there" });
+  const plain = { captioned: false, forwarded: false };
+  assert.deepEqual(classifyInbound({ conversation: "What is a study permit?" }), { kind: "text", text: "What is a study permit?", ...plain });
+  assert.deepEqual(classifyInbound({ extendedTextMessage: { text: "hi there" } }), { kind: "text", text: "hi there", ...plain });
   for (const m of ["imageMessage", "videoMessage", "audioMessage", "documentMessage", "stickerMessage"]) {
-    assert.deepEqual(classifyInbound({ [m]: {} }), { kind: "media" }, m);
+    assert.deepEqual(classifyInbound({ [m]: {} }), { kind: "media", forwarded: false }, m);
   }
   assert.deepEqual(classifyInbound({ reactionMessage: { text: "👍" } }), { kind: "other" });
   assert.deepEqual(classifyInbound({ conversation: "   " }), { kind: "other" });
@@ -56,4 +57,32 @@ test("jidTag is stable and never contains the phone number", () => {
   assert.equal(jidTag(jid), jidTag(jid));
   assert.match(jidTag(jid), /^[0-9a-f]{10}$/);
   assert.ok(!jidTag(jid).includes("5145551234"));
+});
+
+// --- FIX-05: inbound normalizer -------------------------------------------------------
+
+test("S09: a disappearing-mode (ephemeral) question is unwrapped and keeps the chat timer", () => {
+  const r = classifyInbound({
+    ephemeralMessage: { message: { extendedTextMessage: { text: "How long is a visitor visa valid?", contextInfo: { expiration: 86400 } } } },
+  });
+  assert.deepEqual(r, { kind: "text", text: "How long is a visitor visa valid?", captioned: false, forwarded: false, ephemeralExpiration: 86400 });
+});
+
+test("S10: a captioned photo is answered from its caption; a captionless one stays media", () => {
+  assert.deepEqual(classifyInbound({ imageMessage: { caption: "what does this biometrics letter mean?" } }), {
+    kind: "text", text: "what does this biometrics letter mean?", captioned: true, forwarded: false,
+  });
+  assert.deepEqual(classifyInbound({ documentWithCaptionMessage: { message: { documentMessage: { caption: "is this form right?" } } } }).text, "is this form right?");
+  assert.equal(classifyInbound({ viewOnceMessageV2: { message: { imageMessage: { caption: "" } } } }).kind, "media");
+});
+
+test("edits and other protocol messages are never answered as new questions", () => {
+  assert.equal(classifyInbound({ protocolMessage: { type: 14, editedMessage: { conversation: "edited text" } } }).kind, "other");
+  assert.equal(classifyInbound({ editedMessage: { message: { protocolMessage: { type: 14 } } } }).kind, "other");
+});
+
+test("S51: forwarded messages are flagged (for FIX-39), not changed", () => {
+  const r = classifyInbound({ extendedTextMessage: { text: "IRCC: pay $500 now", contextInfo: { isForwarded: true, forwardingScore: 3 } } });
+  assert.equal(r.kind, "text");
+  assert.equal(r.forwarded, true);
 });

@@ -9,25 +9,46 @@
 // Pure functions only: index.js wires them to Baileys, the tests drive them
 // directly (test/ingress.test.js).
 import { createHash } from "node:crypto";
+import { normalizeMessageContent } from "@whiskeysockets/baileys";
+
+const MEDIA_TYPES = ["imageMessage", "videoMessage", "audioMessage", "documentMessage", "stickerMessage"];
 
 /**
- * Classify one Baileys message for routing, before any allowlist lookup:
- *   { kind: "text", text }  a typed message (conversation or extendedTextMessage)
- *   { kind: "media" }       media with no caption (image/video/audio/document/sticker)
- *   { kind: "other" }       reactions, protocol messages, anything else: no outbound
+ * Classify one Baileys message for routing, before any allowlist lookup (FIX-05: inbound
+ * normalizer). Wrappers are unwrapped first with Baileys' own normalizeMessageContent
+ * (ephemeral / disappearing-mode, view-once, document-with-caption): before this, a question
+ * sent in a disappearing chat was silently dropped.
+ *
+ *   { kind: "text",  text, captioned, forwarded, ephemeralExpiration }
+ *       typed text, or the CAPTION of a photo/video/document (captioned: true)
+ *   { kind: "media", forwarded, ephemeralExpiration }   media with no caption
+ *   { kind: "other" }   reactions, protocol messages (incl. edits/revokes), anything else
+ *
+ * Edits arrive as protocolMessage and are skipped here on purpose: an edit must not be
+ * answered as a brand-new question (messages.update is the only edit path).
+ * `forwarded` is exposed for the forwarded-scam handling (FIX-39); nothing acts on it yet.
+ * `ephemeralExpiration` is the chat's disappearing timer, so replies can match it.
  */
-export function classifyInbound(message) {
-  if (!message) return { kind: "other" };
-  const text = message.conversation ?? message.extendedTextMessage?.text ?? "";
-  if (text.trim()) return { kind: "text", text };
-  const isMedia = !!(
-    message.imageMessage ||
-    message.videoMessage ||
-    message.audioMessage ||
-    message.documentMessage ||
-    message.stickerMessage
-  );
-  return { kind: isMedia ? "media" : "other" };
+export function classifyInbound(message, { normalize = normalizeMessageContent } = {}) {
+  if (!message || message.protocolMessage || message.editedMessage) return { kind: "other" };
+  const content = normalize(message);
+  if (!content || content.protocolMessage) return { kind: "other" };
+
+  // A plain `conversation` string carries no contextInfo; text-with-context and media do.
+  const ctx = content.extendedTextMessage?.contextInfo ?? MEDIA_TYPES.map((k) => content[k]?.contextInfo).find(Boolean);
+  const meta = {
+    forwarded: !!ctx?.isForwarded,
+    ...(ctx?.expiration ? { ephemeralExpiration: ctx.expiration } : {}),
+  };
+
+  const typed = content.conversation ?? content.extendedTextMessage?.text ?? "";
+  if (typed.trim()) return { kind: "text", text: typed, captioned: false, ...meta };
+
+  const caption = content.imageMessage?.caption ?? content.videoMessage?.caption ?? content.documentMessage?.caption ?? "";
+  if (caption.trim()) return { kind: "text", text: caption, captioned: true, ...meta };
+
+  if (MEDIA_TYPES.some((k) => content[k])) return { kind: "media", ...meta };
+  return { kind: "other" };
 }
 
 /**
