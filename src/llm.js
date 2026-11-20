@@ -18,7 +18,7 @@ const client = new OpenAI({
 // switching back up later is just this one string.
 const MODEL = process.env.OPENAI_MODEL ?? "gpt-5.5";
 
-const SYSTEM_PROMPT = `You are a friendly helper explaining Canadian immigration (IRCC) topics
+export const SYSTEM_PROMPT = `You are a friendly helper explaining Canadian immigration (IRCC) topics
 to someone who is not fluent in bureaucratic or legal language, over WhatsApp.
 
 Rules:
@@ -48,8 +48,8 @@ pattern, not a stylistic add-on):
 - Use a relevant emoji as a visual anchor at the start of each bullet where
   it fits naturally (✅ 📌 🍁 🛂 📅 etc.) — don't force one onto every line
   if it feels awkward.
-- WhatsApp bold is *single asterisks* (e.g. *this*), NOT **double
-  asterisks** — double asterisks show up as literal stars, so never use them.
+- Write plain standard Markdown (**bold** for key terms, "-" bullets,
+  "1." steps when order matters). The app converts it for WhatsApp.
 - Keep the whole answer under ~180 words unless the question genuinely
   needs a longer breakdown (e.g. a multi-factor eligibility comparison) —
   even then, prefer more bullets over longer sentences.
@@ -57,7 +57,9 @@ pattern, not a stylistic add-on):
   official or licensed immigration advice, and for anything that affects a
   real application they should double check on canada.ca or with a
   licensed professional (RCIC/lawyer).
-- After the answer, list the source URL(s) you actually used, one per line.`;
+- Cite the retrieved content you used by its number in square brackets,
+  like [1] or [2], right after the fact it supports. Do NOT write any URLs
+  or web addresses: the app adds the official source links itself.`;
 
 // High-stakes language — a refusal, deadline, or removal proceeding is a
 // materially different situation from "how do I apply": a wrong or
@@ -116,8 +118,8 @@ export async function synthesize(question, chunks) {
           ? "keyword match"
           : `similarity ${c.similarity.toFixed(2)}`;
       return (
-        `[${i + 1}] (${provenance}) ${c.metadata.title ?? ""}\n` +
-        `URL: ${c.metadata.url ?? "unknown"}\n${c.content}`
+        // No URL here (FIX-04): links are rendered by code from metadata, never copied by the model.
+        `[${i + 1}] (${provenance}) ${c.metadata.title ?? ""}\n${c.content}`
       );
     })
     .join("\n\n");

@@ -3,6 +3,7 @@ import { PostgresSaver } from "@langchain/langgraph-checkpoint-postgres";
 import { retrieve, topSimilarity } from "./db.js";
 import { synthesize } from "./llm.js";
 import { webFallback, persistWebFallback } from "./websearch.js";
+import { renderAnswer } from "./render.js";
 
 // Everything that leaves the process (retrieval, web fallback, the LLM). buildGraph(deps)
 // takes overrides so the offline dialogue harness (test/dialogue/) runs with stubs:
@@ -252,7 +253,8 @@ function makeAnswerFreeform({ retrieve, topSimilarity, synthesize, webFallback, 
     // know" rather than guessing.
   }
 
-  return synthesize(question, chunks);
+  // FIX-04: code, not the model, owns WhatsApp formatting and the source links.
+  return renderAnswer(await synthesize(question, chunks), chunks).text;
   };
 }
 
