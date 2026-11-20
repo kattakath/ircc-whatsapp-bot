@@ -21,7 +21,7 @@ test("collision baseline: non-questions at the menu that reach RAG today", async
   assert.ok(hits.length <= corpus.atMenu.length);
 });
 
-test("FIX-09: no corpus non-question reaches RAG", { todo: "FIX-09" }, async () => {
+test("FIX-09: no corpus non-question reaches RAG", async () => {
   for (const reply of corpus.atMenu) {
     const h = makeHarness();
     await h.turn("hi");

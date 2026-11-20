@@ -1,0 +1,87 @@
+// Pre-router dialogue-act gate (docs/conversation-design.md FIX-09).
+//
+// Runs only where NO prompt is pending (menu-level routing): a pending yes/no, choice or slot
+// prompt binds first (P18 order; Rasa form validation maps slots before intent fallback).
+// Short non-questions used to reach retrieval + the LLM, a ~27 s turn for "thanks" or "1."
+// (measured). Each class here gets an instant, fixed reply — or deliberate silence for a bare
+// acknowledgement, matching how people close a sequence (Schegloff & Sacks 1973, "Opening up
+// closings"). The lexicons are judgement calls, measured by the FIX-01 collision corpus.
+import { STATUS_URL } from "./redact.js";
+
+const CONTACT_URL = "https://www.canada.ca/en/immigration-refugees-citizenship/corporate/contact-ircc.html";
+const REPRESENTATIVE_URL = "https://www.canada.ca/en/immigration-refugees-citizenship/services/immigration-citizenship-representative/choose.html";
+const MENU_HINT = "Ask me a question, or reply 1, 2 or 3.";
+
+export const REPLIES = {
+  closing: "You're welcome! 🙂 Ask me anytime.",
+  ack: "", // deliberate silence: replying to 👍 is noise, not help
+  prod: `I'm here 🙂 ${MENU_HINT}`,
+  noise: `Sorry, I didn't catch that. ${MENU_HINT}`,
+  hold: "No problem 🙂 Ask whenever you're ready.",
+  complaint: "Sorry about that. Tell me what you meant, and I'll try again.",
+  identity:
+    "I'm a helper bot, not IRCC and not a person. I read public canada.ca pages and can't see anyone's files or applications.\n" +
+    `To reach IRCC itself: ${CONTACT_URL}`,
+  handoff:
+    "I can't call you or connect you to a person.\n" +
+    `• Contact IRCC: ${CONTACT_URL}\n` +
+    `• Find a licensed consultant or lawyer: ${REPRESENTATIVE_URL}`,
+  fileCheck: `I can't see applications or files. To check yours, sign in to your IRCC account: ${STATUS_URL}`,
+};
+
+const norm = (t) =>
+  t
+    .trim()
+    .toLowerCase()
+    .replace(/[’`]/g, "'")
+    .replace(/\s+/g, " ");
+const words = (t) => t.replace(/[^\p{L}\p{N}' ]/gu, " ").trim().split(/\s+/).filter(Boolean);
+const hasLetters = (t) => /[\p{L}\p{N}]/u.test(t);
+
+const POLITE_PREFIX = "(?:(?:ok|okay|cool|great|perfect|got it|alright|oh|ah)[,!. ]+)*";
+const CLOSING_RE = new RegExp(
+  `^${POLITE_PREFIX}(?:thanks?|thank ?you|thx|ty|tysm|cheers|bye|good ?bye|many thanks)(?:[ ,!.]+(?:so much|very much|a lot|again|sir|madam|dear|bro|brother|sis|ji))*[\\s!.🙏😊🙂❤️👍]*$`,
+);
+const ACK_SET = new Set(["ok", "okay", "k", "kk", "cool", "great", "nice", "alright", "got it", "sure", "fine", "yes", "yeah", "no", "nope", "haan", "ji", "lol", "haha", "hmm", "hm", "noted", "ok cool", "okay cool"]);
+const PROD_RE = /^(?:(?:hello|hi|hey|helo|hlo)[!?. ]*)?(?:\?+|are you there\??|anyone there\??|still there\??|u there\??|you there\??)$|^(?:hello|hi|hey|helo|hlo)\?{2,}/;
+const HOLD_RE = /^(?:sorry|wait|hold on|one sec|one second|never ?mind|nvm|my bad|oops|wrong number)\b/;
+const COMPLAINT_SET = new Set(["wrong", "that's wrong", "thats wrong", "that is wrong", "not correct", "incorrect", "no that's wrong", "no thats wrong", "👎"]);
+const IDENTITY_RE = /\b(?:are|r) (?:you|u) (?:from |with )?(?:ircc|the government|government|a bot|bot|a robot|robot|human|a human|real|a real person|a person|ai|an ai)\b|\bwho (?:are|r) (?:you|u)\b/;
+const HANDOFF_RE = /\b(?:talk|speak|chat) (?:to|with) (?:someone|somebody|a person|a human|an agent|an officer|a real person)\b|\b(?:call|phone|ring) me\b|\bcan (?:you|u) call\b|\bhuman agent\b/;
+const FILE_RE = /\b(?:check|see|look at|look into|open|review) (?:my|our|his|her) (?:file|application|case|status)\b/;
+
+/**
+ * Classify a menu-level message. Returns { kind, reply } for a recognised dialogue act, or null
+ * when it should take the normal route (a choice, a reset, or a real question for RAG).
+ */
+export function classifyAct(raw) {
+  const t = norm(raw ?? "");
+  if (!t) return null;
+  if (IDENTITY_RE.test(t)) return { kind: "identity", reply: REPLIES.identity };
+  if (HANDOFF_RE.test(t)) return { kind: "handoff", reply: REPLIES.handoff };
+  if (FILE_RE.test(t)) return { kind: "fileCheck", reply: REPLIES.fileCheck };
+  if (PROD_RE.test(t)) return { kind: "prod", reply: REPLIES.prod };
+  if (!hasLetters(t)) {
+    if (/🙏/u.test(t)) return { kind: "closing", reply: REPLIES.closing };
+    if (/👎/u.test(t)) return { kind: "complaint", reply: REPLIES.complaint };
+    return { kind: /[👍👌✅]/u.test(t) ? "ack" : "noise", reply: /[👍👌✅]/u.test(t) ? REPLIES.ack : REPLIES.noise };
+  }
+  const bare = t.replace(/[!.?,]+$/g, "").trim();
+  if (CLOSING_RE.test(bare)) return { kind: "closing", reply: REPLIES.closing };
+  if (ACK_SET.has(bare)) return { kind: "ack", reply: REPLIES.ack };
+  if (COMPLAINT_SET.has(bare)) return { kind: "complaint", reply: REPLIES.complaint };
+  const w = words(t);
+  if (HOLD_RE.test(t) && w.length <= 5 && !t.includes("?")) return { kind: "hold", reply: REPLIES.hold };
+  // Keyboard mash: one long token with almost no vowels ("asdfgh", "qwrtyp").
+  if (w.length === 1 && /^[a-z]{5,}$/.test(w[0]) && (w[0].match(/[aeiouy]/g) ?? []).length <= 1) {
+    return { kind: "noise", reply: REPLIES.noise };
+  }
+  return null;
+}
+
+/** A short message is still a question when it asks one or names an acronym ("PGWP?", "eTA"). */
+export function isShortQuestion(raw) {
+  const t = (raw ?? "").trim();
+  if (!t || PROD_RE.test(norm(t))) return false;
+  return (/\?\s*$/.test(t) && /\p{L}{2,}/u.test(t)) || /^[A-Za-z]{2,6}\??$/.test(t) && /[A-Z]{2,}/.test(t);
+}
