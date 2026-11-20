@@ -6,6 +6,7 @@ import { PostgresSaver } from "@langchain/langgraph-checkpoint-postgres";
 import qrcode from "qrcode-terminal";
 import pino from "pino";
 import { builder } from "./graph.js";
+import { admit, classifyInbound, jidTag } from "./ingress.js";
 
 // One checkpointer/compiled graph shared across the whole process — on the
 // local Postgres at RAGDB_URI (retrieval itself is Cloudflare AI Search, see
@@ -36,21 +37,20 @@ const PAIR_PHONE_NUMBER = (process.env.PAIR_PHONE_NUMBER ?? "").trim();
 // plain phone-number JID — a newer privacy identifier that doesn't map
 // directly to a phone number. Resolve it via Baileys' LID<->PN store before
 // checking the allowlist.
-async function isAllowed(sock, jid) {
-  if (ALLOWED_NUMBERS.length === 0) return true;
+// Returns "allowed", "denied" or "unresolved" (an @lid with no PN mapping yet);
+// src/ingress.js admit() retries "unresolved" once and turns a throw into a refusal.
+async function allowState(sock, jid) {
+  if (ALLOWED_NUMBERS.length === 0) return "allowed";
 
   let checkJid = jid;
   if (jid.endsWith("@lid")) {
     const pn = await sock.signalRepository.lidMapping.getPNForLID(jid);
-    if (!pn) {
-      console.log(`Could not resolve @lid ${jid} to a phone number yet — treating as not allowed.`);
-      return false;
-    }
+    if (!pn) return "unresolved";
     checkJid = pn;
   }
 
   const number = checkJid.split("@")[0].split(":")[0];
-  return ALLOWED_NUMBERS.includes(number);
+  return ALLOWED_NUMBERS.includes(number) ? "allowed" : "denied";
 }
 
 // Guards against reconnect storms: never auto-retry unbounded, and never
@@ -138,6 +138,7 @@ async function start() {
     setTimeout(start, delayMs);
   });
 
+  // Only ever called for a sender admit() already let through (see messages.upsert).
   async function processMessage(jid, text) {
     console.log(`[in]  ${jid}: ${text}`);
 
@@ -146,11 +147,6 @@ async function start() {
     let fillerTimer = null;
 
     try {
-      if (!(await isAllowed(sock, jid))) {
-        console.log(`Ignored message from non-allowlisted number: ${jid}`);
-        return;
-      }
-
       await sock.sendPresenceUpdate("composing", jid);
 
       // A deep-reasoning synthesis model can take 30-60s. This is
@@ -203,10 +199,8 @@ async function start() {
       console.log(`[out] ${jid}: ${reply.slice(0, 120)}${reply.length > 120 ? "..." : ""}`);
       await sock.sendMessage(jid, { text: reply });
     } catch (err) {
-      // Catches everything for this message, including isAllowed()/LID
-      // resolution failures — a prior bug had that check outside any
-      // try/catch, so a hang or throw there silently dropped the message
-      // with zero logging.
+      // The allowlist check no longer runs here (it is admit() at ingress), so
+      // this only ever answers an admitted sender whose turn failed.
       console.error("Error handling message:", err);
       try {
         await sock.sendMessage(jid, {
@@ -246,39 +240,41 @@ async function start() {
       const jid = msg.key.remoteJid;
       if (!jid || jid.endsWith("@g.us") || jid === "status@broadcast") continue;
 
-      const text =
-        msg.message.conversation ??
-        msg.message.extendedTextMessage?.text ??
-        "";
+      // Reactions, protocol messages and the like never earn a reply (a 👍
+      // answered would be noise), so they need no allowlist lookup either.
+      const inbound = classifyInbound(msg.message);
+      if (inbound.kind === "other") continue;
 
-      if (!text.trim()) {
-        // Silence here used to mean zero feedback — looks exactly like a
-        // broken bot. Distinguish "she sent a photo/voice note/document
-        // with no caption" (worth a gentle nudge) from reactions/protocol
-        // messages/other non-content events (stay silent — replying to a
-        // 👍 reaction would be noise, not help).
-        const isMediaWithoutCaption = !!(
-          msg.message.imageMessage ||
-          msg.message.videoMessage ||
-          msg.message.audioMessage ||
-          msg.message.documentMessage ||
-          msg.message.stickerMessage
-        );
-        if (isMediaWithoutCaption) {
-          enqueue(jid, async () => {
-            try {
-              await sock.sendMessage(jid, {
-                text: "I can only read text messages right now — could you type your question instead?",
-              });
-            } catch (err) {
-              console.error("Failed to send media-nudge reply:", err);
-            }
-          });
+      enqueue(jid, async () => {
+        // Allowlist FIRST (FIX-40): nothing below may send, set presence or log
+        // message text for a sender who is not admitted.
+        const gate = await admit((j) => allowState(sock, j), jid);
+        if (!gate.admit) {
+          if (gate.reason === "not-allowlisted") {
+            console.log(`[ignored] non-allowlisted sender #${jidTag(jid)}`);
+          } else {
+            // check-failed or lid-unresolved: possibly an allowlisted relative
+            // being dropped, so this is the operator's alert line. No text.
+            console.error(`[alert] ingress ${gate.reason} for #${jidTag(jid)}${gate.error ? `: ${gate.error.message}` : ""}`);
+          }
+          return;
         }
-        continue;
-      }
 
-      enqueue(jid, () => processMessage(jid, text));
+        if (inbound.kind === "media") {
+          // Silence would look exactly like a broken bot: nudge an admitted
+          // sender who sent a photo/voice note/document with no caption.
+          try {
+            await sock.sendMessage(jid, {
+              text: "I can only read text messages right now — could you type your question instead?",
+            });
+          } catch (err) {
+            console.error("Failed to send media-nudge reply:", err);
+          }
+          return;
+        }
+
+        await processMessage(jid, inbound.text);
+      });
     }
   });
 }
