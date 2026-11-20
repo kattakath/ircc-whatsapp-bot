@@ -17,7 +17,7 @@ test("lost-status wording is expanded for retrieval only; the model still gets t
 });
 
 test("the expansion fires on lay phrasings of lost status and nowhere else", () => {
-  for (const q of ["I overstayed my visitor visa by 2 months what now", "my study permit expired last week", "I am out of status", "we lost our status", "My work permit has expired, can I stay?"])
+  for (const q of ["I overstayed my visitor visa by 2 months what now", "my study permit expired last week", "I am out of status", "we lost our status", "My work permit has expired, can I stay?", "My study permit ran out last month, can I fix it", "my visa has run out"])
     assert.match(expandRetrievalQuery(q), /restoration/, q);
   for (const q of ["How long can I stay as a visitor", "When does my passport expire?", "How do I extend my study permit?", "What is the fee for a work permit?"])
     assert.equal(expandRetrievalQuery(q), q, q);
@@ -30,6 +30,6 @@ test("isHighStakes: lost status in either word order", () => {
 });
 
 test("one pattern: every phrasing that expands retrieval is also high stakes (seen live: 'status ran out')", () => {
-  for (const q of ["I overstayed my visitor visa", "my study permit expired last week", "I am out of status", "we lost our status", "My work permit has expired", "My visitor status ran out", "my status has ended"])
+  for (const q of ["I overstayed my visitor visa", "my study permit expired last week", "I am out of status", "we lost our status", "My work permit has expired", "My visitor status ran out", "my status has ended", "My study permit ran out last month", "my visa has run out"])
     assert.equal(isHighStakes(q), expandRetrievalQuery(q) !== q, q);
 });
