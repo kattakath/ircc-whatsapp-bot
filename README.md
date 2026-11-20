@@ -241,7 +241,7 @@ Supported systems: `x86_64-linux`, `aarch64-linux`, `aarch64-darwin`
 ```
 
 See `nix/module.nix` for the full option surface (`package`, `stateDir`,
-`model`, `langsmithTracing`/`langsmithProject`, `aiSearch.accountId`/
+`model`, `langsmithTracing`/`langsmithProject`/`langsmithShowContent` (traces hide message text unless this is set), `aiSearch.accountId`/
 `aiSearch.instance`, `ragdbUri`, `localRag.enable`, `environmentFile`,
 `keychainServices`, `openaiBaseUrl`).
 `openaiBaseUrl` points synthesis at any OpenAI-Responses-compatible endpoint

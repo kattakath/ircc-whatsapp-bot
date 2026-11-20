@@ -7,6 +7,7 @@ import pino from "pino";
 import { builder } from "./graph.js";
 import { admit, classifyInbound, jidTag } from "./ingress.js";
 import { CAPTION_PREFACE, handleTurn } from "./turn.js";
+import { findSensitive, sensitiveReply } from "./redact.js";
 
 // One checkpointer/compiled graph shared across the whole process — on the
 // local Postgres at RAGDB_URI (retrieval itself is Cloudflare AI Search, see
@@ -195,6 +196,19 @@ async function start() {
 
         // Reply inside the same disappearing-message timer the user chose (FIX-05).
         const sendOptions = inbound.ephemeralExpiration ? { ephemeralExpiration: inbound.ephemeralExpiration } : undefined;
+
+        // FIX-07: an ID number (UCI, SIN, application, passport) is never processed: no graph
+        // run, no checkpoint, no search query, no log of the text. One instant, canned reply (S12).
+        const sensitive = inbound.kind === "text" ? findSensitive(inbound.text) : [];
+        if (sensitive.length) {
+          console.log(`[redacted] #${jidTag(jid)} sent ${sensitive.join(", ")}; not processed`);
+          try {
+            await sock.sendMessage(jid, { text: sensitiveReply(sensitive) }, sendOptions);
+          } catch (err) {
+            console.error("Failed to send the ID-number reply:", err);
+          }
+          return;
+        }
 
         if (inbound.kind === "media") {
           // Silence would look exactly like a broken bot: nudge an admitted
