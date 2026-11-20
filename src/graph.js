@@ -200,6 +200,11 @@ const CITIZENSHIP_SLOTS = [
 
 const BRANCH_SLOTS = { 4: PR_SLOTS, 5: CITIZENSHIP_SLOTS };
 const BRANCH_SOURCES = { 4: ["ircc-crawl-pr"], 5: ["ircc-crawl-citizenship"] };
+// Profile-free retrieval for the intake summary (FIX-07, S13): the search sees only the topic.
+const BRANCH_RETRIEVAL_QUERY = {
+  4: "Express Entry eligibility and how the Comprehensive Ranking System scores applicants",
+  5: "Canadian citizenship eligibility: physical presence days, income tax filing, language ability and the citizenship test",
+};
 
 function looksLikeRealQuestion(text) {
   return text.trim().length > 12;
@@ -228,12 +233,14 @@ function looksLikeRealQuestion(text) {
 const GRADE_THRESHOLD = 0.6;
 
 function makeAnswerFreeform({ retrieve, topSimilarity, synthesize, webFallback, persistWebFallback }) {
-  return async function answerFreeform(question, sources = null) {
-  let chunks = await retrieve(question, { sources });
+  // `retrievalQuery` (FIX-07): what goes to AI Search and Serper. Defaults to the question;
+  // the intake summary passes a generic query so the user's profile only reaches the LOCAL model.
+  return async function answerFreeform(question, sources = null, { retrievalQuery = question } = {}) {
+  let chunks = await retrieve(retrievalQuery, { sources });
   const gradedWell = topSimilarity(chunks) >= GRADE_THRESHOLD;
 
   if (!gradedWell) {
-    const webChunks = await webFallback(question);
+    const webChunks = await webFallback(retrievalQuery);
     if (webChunks.length > 0) {
       chunks = webChunks; // discard local — CRAG's "incorrect" branch, not a blend
       persistWebFallback(webChunks).catch((err) =>
@@ -387,7 +394,9 @@ const slotSynthesisNode = (answerFreeform) => async function slotSynthesisNode(s
     `My profile: ${profileLine}. Based on official IRCC eligibility criteria, ` +
     `roughly how does this look, and what should I consider next? ` +
     `Be clear this is a rough, informal read — not an official score.`;
-  const answer = await answerFreeform(composedQuestion, BRANCH_SOURCES[state.branch]);
+  const answer = await answerFreeform(composedQuestion, BRANCH_SOURCES[state.branch], {
+    retrievalQuery: BRANCH_RETRIEVAL_QUERY[state.branch],
+  });
   return { pendingMessage: answer, branch: null, slotIndex: 0, slots: {} };
 };
 

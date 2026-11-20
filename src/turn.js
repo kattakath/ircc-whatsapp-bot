@@ -5,6 +5,7 @@
 // layer L2): `send(jid, content, options)` and `presence(state, jid)` are the only ways out, and
 // the harness counts them per inbound message. Behaviour is unchanged from processMessage.
 import { Command } from "@langchain/langgraph";
+import { jidTag } from "./ingress.js";
 
 export const FILLER_TEXT = "One sec — checking the official IRCC info... 🍁";
 export const ERROR_TEXT = "Sorry, something went wrong on my end — try again in a moment.";
@@ -44,7 +45,8 @@ export async function handleTurn({ jid, text, graph, send, presence, preface = n
   // *again* after a failure re-asks the saved question (FIX-03, S03).
   const question = failed && AGAIN_RE.test(text) ? failed.question : text;
 
-  logger.log(`[in]  ${jid}: ${text}`);
+  // Text-free logs (FIX-07): a hashed chat tag and a length, never the message or the number.
+  logger.log(`[in]  #${jidTag(jid)} ${text.length} chars`);
 
   let answered = false;
   let presenceInterval = null;
@@ -83,13 +85,14 @@ export async function handleTurn({ jid, text, graph, send, presence, preface = n
     const graphReply = result.__interrupt__?.[0]?.value;
     if (!graphReply) {
       // The graph always loops back to a node that interrupts; don't leave the user hanging if it ever doesn't.
-      throw new Error(`Graph returned no interrupt to reply with: ${JSON.stringify(result)}`);
+      // No state dump in the message: it would carry the user's text into the log.
+      throw new Error(`Graph returned no interrupt to reply with (keys: ${Object.keys(result ?? {}).join(",")})`);
     }
 
     failures.delete(jid);
     const reply = preface ? `${preface}\n\n${graphReply}` : graphReply;
     answered = true; // before sending, so a filler racing the reply cannot follow it
-    logger.log(`[out] ${jid}: ${reply.slice(0, 120)}${reply.length > 120 ? "..." : ""}`);
+    logger.log(`[out] #${jidTag(jid)} ${reply.length} chars`);
     await send(jid, { text: reply }, sendOptions);
     return { reply };
   } catch (err) {

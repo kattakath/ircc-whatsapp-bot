@@ -111,6 +111,11 @@ let
     export CF_AI_SEARCH_INSTANCE=${lib.escapeShellArg cfg.aiSearch.instance}
     export LANGCHAIN_TRACING_V2=${if cfg.langsmithTracing then "true" else "false"}
     export LANGCHAIN_PROJECT=${lib.escapeShellArg cfg.langsmithProject}
+    ${lib.optionalString (cfg.langsmithTracing && !cfg.langsmithShowContent) ''
+      # FIX-07: traces keep timing and errors, never the conversation (langsmith SDK reads these).
+      export LANGSMITH_HIDE_INPUTS=true
+      export LANGSMITH_HIDE_OUTPUTS=true
+    ''}
     ${lib.optionalString (cfg.allowedNumbers != [ ]) ''
       export ALLOWED_NUMBERS=${lib.escapeShellArg (lib.concatStringsSep "," cfg.allowedNumbers)}
     ''}
@@ -179,6 +184,16 @@ in
       type = lib.types.bool;
       default = true;
       description = "Enable LangSmith tracing (LANGCHAIN_TRACING_V2).";
+    };
+
+    langsmithShowContent = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = ''
+        Send message text and answers to LangSmith with each trace. Off by default
+        (LANGSMITH_HIDE_INPUTS/OUTPUTS): users' immigration details stay on this machine and
+        traces keep only timing, structure and errors (docs/conversation-design.md FIX-07).
+      '';
     };
 
     langsmithProject = lib.mkOption {

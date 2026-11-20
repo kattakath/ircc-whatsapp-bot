@@ -203,3 +203,34 @@ test("S05: an error in a mid-intake side question keeps the intake where it was"
   assert.equal(st.slotIndex, 1);
   assert.match(r.sends.at(-1), /education/i);
 });
+
+// --- FIX-07: PII minimisation ----------------------------------------------------------
+
+test("FIX-07: turn logs carry a tag and a length, never the message or the reply", async () => {
+  const { handleTurn } = await import("../../src/turn.js");
+  const h = makeHarness();
+  await h.turn("hi");
+  const lines = [];
+  const logger = { log: (...a) => lines.push(a.join(" ")), error: (...a) => lines.push(a.join(" ")) };
+  const q = "How do I renew my PR card? I am 34";
+  await handleTurn({ jid: h.jid, text: q, graph: h.graph, send: async () => {}, presence: async () => {}, logger, failures: new Map() });
+  assert.ok(lines.length >= 2);
+  for (const l of lines) {
+    assert.ok(!l.includes("renew"), `log line leaks the question: ${l}`);
+    assert.ok(!l.includes("Answer to"), `log line leaks the reply: ${l}`);
+    assert.ok(!l.includes(h.jid.split("@")[0]), `log line leaks the number: ${l}`);
+  }
+});
+
+test("S13: the intake profile reaches the local model but never the search queries", async () => {
+  const h = makeHarness();
+  await h.turn("hi");
+  await h.turn("2"); // settle
+  await h.turn("1"); // PR intake
+  for (const a of ["34", "4", "2", "3", "no", "no"]) await h.turn(a);
+  const summary = h.calls.synthesize.at(-1).question;
+  assert.match(summary, /34/, "the local synthesis input carries the profile");
+  for (const { question } of [...h.calls.retrieve, ...h.calls.webFallback.map((q) => ({ question: q }))]) {
+    assert.ok(!/\b34\b|\bage\b|My profile/i.test(question), `search query carries the profile: ${question}`);
+  }
+});
