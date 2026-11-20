@@ -7,7 +7,7 @@ import pino from "pino";
 import { builder, pendingPromptText } from "./graph.js";
 import { mediaReply } from "./media.js";
 import { ANSWERED_ABOVE, createDedupe, isDedupeCandidate } from "./dedupe.js";
-import { FORWARDED_PREFACE, FRAUD_CHECK, forwardedAction } from "./gate.js";
+import { FORWARDED_PREFACE, fraudCheck, scamAction } from "./gate.js";
 import { admit, classifyInbound, jidTag } from "./ingress.js";
 import { CAPTION_PREFACE, FILLER_TEXT, handleTurn } from "./turn.js";
 import { createHolder, createQueues, createSender } from "./outbox.js";
@@ -238,11 +238,11 @@ async function start() {
     }
     mediaStreak.delete(jid);
 
-    // FIX-39: a forwarded scam gets IRCC's fraud guidance, never a restatement or a search.
-    const fwd = forwardedAction(inbound);
+    // FIX-39/39b: a forwarded or pasted scam gets IRCC's fraud guidance, never a restatement or a search.
+    const fwd = scamAction(inbound);
     if (fwd === "fraud") {
-      console.log(`[fraud-check] #${jidTag(jid)} forwarded scam-like text; not processed`);
-      await sender.send(jid, { text: FRAUD_CHECK }, { ...sendOptions, quoted: msg });
+      console.log(`[fraud-check] #${jidTag(jid)} ${inbound.forwarded ? "forwarded" : "pasted"} scam-like text; not processed`);
+      await sender.send(jid, { text: fraudCheck({ forwarded: inbound.forwarded }) }, { ...sendOptions, quoted: msg });
       return;
     }
 
