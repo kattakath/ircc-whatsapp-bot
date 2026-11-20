@@ -6,7 +6,8 @@ import qrcode from "qrcode-terminal";
 import pino from "pino";
 import { builder } from "./graph.js";
 import { admit, classifyInbound, jidTag } from "./ingress.js";
-import { CAPTION_PREFACE, handleTurn } from "./turn.js";
+import { CAPTION_PREFACE, FILLER_TEXT, handleTurn } from "./turn.js";
+import { createHolder, createQueues, createSender } from "./outbox.js";
 import { findSensitive, sensitiveReply } from "./redact.js";
 
 // One checkpointer/compiled graph shared across the whole process — on the
@@ -58,6 +59,13 @@ async function allowState(sock, jid) {
 // re-request a pairing code more than once per process lifetime (a prior
 // bug here caused dozens of pairing-code requests against WhatsApp's
 // servers within seconds — exactly what anti-abuse detection watches for).
+// FIX-21: one writer per chat for the whole process. The socket is swapped on reconnect; the
+// queues, the newest-inbound map and the outbox are not.
+const holder = createHolder();
+const enqueue = createQueues();
+const sender = createSender(holder, new Map(), console, { dropOnFlush: [FILLER_TEXT] });
+const latestInbound = new Map(); // FIX-10: newest inbound id per chat
+
 const MAX_RECONNECT_ATTEMPTS = 3;
 let reconnectAttempts = 0;
 let pairingCodeRequested = false;
@@ -75,6 +83,9 @@ async function start() {
     // human timescale. Give every QR a full 2 minutes.
     qrTimeout: 120_000,
   });
+
+  holder.sock = sock;
+  holder.ready = false;
 
   sock.ev.on("creds.update", saveCreds);
 
@@ -102,11 +113,14 @@ async function start() {
 
     if (connection === "open") {
       reconnectAttempts = 0;
+      holder.ready = true;
       console.log("WhatsApp connected. Listening for messages...");
+      await sender.flush(); // answers finished while disconnected: one message per chat
       return;
     }
 
     if (connection !== "close") return;
+    holder.ready = false;
 
     const statusCode = lastDisconnect?.error?.output?.statusCode;
 
@@ -128,8 +142,10 @@ async function start() {
 
     reconnectAttempts += 1;
     if (reconnectAttempts > MAX_RECONNECT_ATTEMPTS) {
-      console.error(`Giving up after ${MAX_RECONNECT_ATTEMPTS} reconnect attempts (code ${statusCode}). Restart manually.`);
-      return;
+      // Exit so the supervisor (launchd KeepAlive / systemd Restart=always) starts a fresh process;
+      // returning left a live process with no socket, which no supervisor ever restarts.
+      console.error(`Giving up after ${MAX_RECONNECT_ATTEMPTS} reconnect attempts (code ${statusCode}). Exiting for a restart.`);
+      process.exit(1);
     }
     const delayMs = Math.min(30_000, 2 ** reconnectAttempts * 2000);
     console.log(
@@ -150,25 +166,13 @@ async function start() {
       preface: inbound.captioned ? CAPTION_PREFACE : null,
       sendOptions,
       graph,
-      send: (to, content, options) => sock.sendMessage(to, content, options),
-      presence: (state, to) => sock.sendPresenceUpdate(state, to),
+      send: sender.send,
+      presence: sender.presence,
     });
   }
 
-  // Serialize processing per sender: without this, a burst of messages sent
-  // while a slow reply is still in flight fire concurrently and get
-  // answered out of order, which reads as broken to a non-technical user.
-  // Different senders still run fully in parallel.
-  const jidQueues = new Map();
-  function enqueue(jid, task) {
-    const prev = jidQueues.get(jid) ?? Promise.resolve();
-    const next = prev.then(task, task);
-    jidQueues.set(jid, next.catch(() => {}));
-    return next;
-  }
-
-  // FIX-10: the newest inbound message id per chat, so a reply can tell it has been overtaken.
-  const latestInbound = new Map();
+  // Messages are serialised per sender (a burst answered concurrently reads as broken); senders
+  // run in parallel. The queues live at module scope (FIX-21: createQueues) to survive reconnects.
 
   sock.ev.on("messages.upsert", async ({ messages, type }) => {
     if (type !== "notify") return;
@@ -209,7 +213,7 @@ async function start() {
         if (sensitive.length) {
           console.log(`[redacted] #${jidTag(jid)} sent ${sensitive.join(", ")}; not processed`);
           try {
-            await sock.sendMessage(jid, { text: sensitiveReply(sensitive) }, sendOptions);
+            await sender.send(jid, { text: sensitiveReply(sensitive) }, sendOptions);
           } catch (err) {
             console.error("Failed to send the ID-number reply:", err);
           }
@@ -220,7 +224,7 @@ async function start() {
           // Silence would look exactly like a broken bot: nudge an admitted
           // sender who sent a photo/voice note/document with no caption.
           try {
-            await sock.sendMessage(jid, {
+            await sender.send(jid, {
               text: "I can only read text messages right now — could you type your question instead?",
             }, sendOptions);
           } catch (err) {
