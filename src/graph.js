@@ -4,6 +4,11 @@ import { retrieve, topSimilarity } from "./db.js";
 import { synthesize } from "./llm.js";
 import { webFallback, persistWebFallback } from "./websearch.js";
 
+// Everything that leaves the process (retrieval, web fallback, the LLM). buildGraph(deps)
+// takes overrides so the offline dialogue harness (test/dialogue/) runs with stubs:
+// docs/conversation-design.md FIX-01.
+const DEFAULT_DEPS = { retrieve, topSimilarity, synthesize, webFallback, persistWebFallback };
+
 // Progressive disclosure, two short steps instead of one 6-option list —
 // W3C COGA guidance on impaired working memory (1-3 items, stricter than
 // the classic "7+-2") for anyone deciding under attention/focus difficulty.
@@ -212,7 +217,8 @@ function looksLikeRealQuestion(text) {
 // the already-slow synthesis call).
 const GRADE_THRESHOLD = 0.6;
 
-async function answerFreeform(question, sources = null) {
+function makeAnswerFreeform({ retrieve, topSimilarity, synthesize, webFallback, persistWebFallback }) {
+  return async function answerFreeform(question, sources = null) {
   let chunks = await retrieve(question, { sources });
   const gradedWell = topSimilarity(chunks) >= GRADE_THRESHOLD;
 
@@ -230,6 +236,7 @@ async function answerFreeform(question, sources = null) {
   }
 
   return synthesize(question, chunks);
+  };
 }
 
 // --- graph state ------------------------------------------------------------
@@ -291,10 +298,10 @@ function menuNode(state) {
   return { incomingText: text, pendingMessage: null, started: true };
 }
 
-async function quickAnswerNode(state) {
+const quickAnswerNode = (answerFreeform) => async function quickAnswerNode(state) {
   const answer = await answerFreeform(state.incomingText);
   return { pendingMessage: answer };
-}
+};
 
 function topicPromptNode(state) {
   const branch = TOPIC_BRANCHES[state.branch];
@@ -302,11 +309,11 @@ function topicPromptNode(state) {
   return { incomingText: text };
 }
 
-async function topicAnswerNode(state) {
+const topicAnswerNode = (answerFreeform) => async function topicAnswerNode(state) {
   const branch = TOPIC_BRANCHES[state.branch];
   const answer = await answerFreeform(state.incomingText, branch.sources);
   return { pendingMessage: answer, branch: null };
-}
+};
 
 function freeformPromptNode(state) {
   const text = interrupt("Go ahead, ask me anything about coming to Canada.");
@@ -332,12 +339,12 @@ function settlePromptNode() {
   return { incomingText: translated ?? text };
 }
 
-async function freeformAnswerNode(state) {
+const freeformAnswerNode = (answerFreeform) => async function freeformAnswerNode(state) {
   const answer = await answerFreeform(state.incomingText);
   return { pendingMessage: answer };
-}
+};
 
-async function slotFillNode(state) {
+const slotFillNode = (answerFreeform) => async function slotFillNode(state) {
   const slotDefs = BRANCH_SLOTS[state.branch];
   const currentSlot = slotDefs[state.slotIndex];
   const prompt = state.pendingMessage ? `${state.pendingMessage}\n\n${currentSlot.prompt}` : currentSlot.prompt;
@@ -361,9 +368,9 @@ async function slotFillNode(state) {
     slotIndex: state.slotIndex + 1,
     pendingMessage: null,
   };
-}
+};
 
-async function slotSynthesisNode(state) {
+const slotSynthesisNode = (answerFreeform) => async function slotSynthesisNode(state) {
   const slotDefs = BRANCH_SLOTS[state.branch];
   const profileLine = slotDefs.map((s) => s.describe(state.slots[s.key])).join("; ");
   const composedQuestion =
@@ -372,7 +379,7 @@ async function slotSynthesisNode(state) {
     `Be clear this is a rough, informal read — not an official score.`;
   const answer = await answerFreeform(composedQuestion, BRANCH_SOURCES[state.branch]);
   return { pendingMessage: answer, branch: null, slotIndex: 0, slots: {} };
-}
+};
 
 // --- routing -------------------------------------------------------------
 
@@ -436,22 +443,24 @@ function routeFromRoot(state) {
   return state.hasGreeted ? "entry" : "greeting";
 }
 
-const builder = new StateGraph(State)
+function buildGraph(overrides = {}) {
+  const answerFreeform = makeAnswerFreeform({ ...DEFAULT_DEPS, ...overrides });
+  return new StateGraph(State)
   .addNode("greeting", greetingNode)
   .addNode("entry", entryNode)
   .addNode("reset", resetNode)
   .addNode("menu", menuNode)
-  .addNode("quickAnswer", quickAnswerNode)
+  .addNode("quickAnswer", quickAnswerNode(answerFreeform))
   .addNode("tempPrompt", tempPromptNode)
   .addNode("settlePrompt", settlePromptNode)
   .addNode("setTopicBranch", setTopicBranchNode)
   .addNode("topicPrompt", topicPromptNode)
-  .addNode("topicAnswer", topicAnswerNode)
+  .addNode("topicAnswer", topicAnswerNode(answerFreeform))
   .addNode("freeformPrompt", freeformPromptNode)
-  .addNode("freeformAnswer", freeformAnswerNode)
+  .addNode("freeformAnswer", freeformAnswerNode(answerFreeform))
   .addNode("setSlotBranch", setSlotBranchNode)
-  .addNode("slotFill", slotFillNode)
-  .addNode("slotSynthesis", slotSynthesisNode)
+  .addNode("slotFill", slotFillNode(answerFreeform))
+  .addNode("slotSynthesis", slotSynthesisNode(answerFreeform))
 
   .addConditionalEdges(START, routeFromRoot, {
     greeting: "greeting",
@@ -501,5 +510,9 @@ const builder = new StateGraph(State)
     slotSynthesis: "slotSynthesis",
   })
   .addEdge("slotSynthesis", "menu");
+}
 
-export { builder, State };
+// The production graph, with the real dependencies (index.js, simulate.js).
+const builder = buildGraph();
+
+export { builder, buildGraph, State };
