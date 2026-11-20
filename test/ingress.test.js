@@ -11,7 +11,7 @@ test("classifyInbound: typed text, captionless media, and everything else", () =
   assert.deepEqual(classifyInbound({ conversation: "What is a study permit?" }), { kind: "text", text: "What is a study permit?", ...plain });
   assert.deepEqual(classifyInbound({ extendedTextMessage: { text: "hi there" } }), { kind: "text", text: "hi there", ...plain });
   for (const m of ["imageMessage", "videoMessage", "audioMessage", "documentMessage", "stickerMessage"]) {
-    assert.deepEqual(classifyInbound({ [m]: {} }), { kind: "media", forwarded: false }, m);
+    assert.deepEqual(classifyInbound({ [m]: {} }), { kind: "media", mediaType: m.replace("Message", ""), forwarded: false }, m);
   }
   assert.deepEqual(classifyInbound({ reactionMessage: { text: "👍" } }), { kind: "other" });
   assert.deepEqual(classifyInbound({ conversation: "   " }), { kind: "other" });
