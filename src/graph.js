@@ -60,12 +60,40 @@ function normalizeChoice(text) {
   return NUMBER_WORDS[t] ?? t;
 }
 
-const YES_WORDS = new Set(["y", "yes", "yeah", "yep", "ya", "yup"]);
-const NO_WORDS = new Set(["n", "no", "nope", "nah"]);
+// FIX-08: a small multilingual yes/no lexicon (P17 language floor; judgement call, measured by
+// the FIX-01 collision corpus). "ok" and 👍 count as yes ONLY here, at a yes/no prompt (P18:
+// the pending prompt binds before any dialogue-act class).
+const YES_WORDS = new Set([
+  "y", "yes", "yeah", "yep", "ya", "yup", "yes please", "ok", "okay", "k", "sure", "correct", "right",
+  "👍", "✅", "✔️", "haan", "han", "ha", "ji", "haan ji", "हाँ", "हां", "si", "sí", "oui", "ja", "da",
+]);
+const NO_WORDS = new Set(["n", "no", "nope", "nah", "not really", "never", "👎", "❌", "nahi", "nahin", "nai", "नहीं", "non", "nein"]);
 function parseYesNo(text) {
-  const t = text.trim().toLowerCase().replace(/[.!?]+$/, "");
+  const t = text.trim().toLowerCase().replace(/[.!?,]+$/, "").replace(/\s+/g, " ");
   if (YES_WORDS.has(t)) return "yes";
   if (NO_WORDS.has(t)) return "no";
+  return null;
+}
+
+// FIX-08: days in Canada must be an exact count. An estimate ("about 3 years", "2 or 3 years")
+// is never turned into days: "2 or 3 years" used to become 23 days, and rounding a guess onto
+// the 1,095-day legal threshold would mislead. The official calculator gives the real number.
+const PRESENCE_CALCULATOR_URL =
+  "https://www.canada.ca/en/immigration-refugees-citizenship/services/canadian-citizenship/adult-minor/how/physical-presence.html";
+const ESTIMATE_REPROMPT =
+  "I need the exact number of days, not an estimate, because the rule is a precise count. " +
+  `IRCC's physical presence calculator works it out for you: ${PRESENCE_CALCULATOR_URL}`;
+function parseDaysPresent(text) {
+  const t = text.trim().toLowerCase();
+  if (/\b(not sure|don'?t know|dont know|idk|no idea|unsure)\b/.test(t)) return { reprompt: ESTIMATE_REPROMPT };
+  const exact = t.match(/^(\d{1,3}(?:,\d{3})+|\d+)\s*(?:days?)?$/);
+  if (exact) {
+    const n = Number(exact[1].replace(/,/g, ""));
+    return Number.isInteger(n) && n >= 0 && n <= 1826 ? n : null; // at most 5 years of days
+  }
+  if (/\d/.test(t) && /\b(years?|yrs?|months?|weeks?|about|around|approx\w*|roughly|maybe|almost|nearly|or|to)\b|~|-/.test(t)) {
+    return { reprompt: ESTIMATE_REPROMPT };
+  }
   return null;
 }
 
@@ -170,14 +198,11 @@ const CITIZENSHIP_SLOTS = [
   {
     key: "yearsPresent",
     prompt:
-      "Roughly how many total days have you physically been in Canada in the last 5 years " +
-      "(as PR, and also count any time before that as a temporary resident or protected person)? " +
-      "A rough number is fine.",
-    parse: (t) => {
-      const n = parseInt(t.replace(/[^0-9]/g, ""), 10);
-      return Number.isInteger(n) && n >= 0 && n <= 3650 ? n : null;
-    },
-    describe: (v) => `roughly ${v} days physically present in Canada in the last 5 years`,
+      "How many days have you been physically present in Canada in the last 5 years? " +
+      "Reply with the exact number of days (IRCC's physical presence calculator counts them: " +
+      `${PRESENCE_CALCULATOR_URL} ), or say *not sure*.`,
+    parse: parseDaysPresent,
+    describe: (v) => `${v} days physically present in Canada in the last 5 years`,
   },
   {
     key: "taxYears",
@@ -272,8 +297,10 @@ const State = Annotation.Root({
   started: Annotation({ default: () => false }),
   branch: Annotation({ default: () => null }),
   slotIndex: Annotation({ default: () => 0 }),
+  // A merge reducer can never REMOVE a key, so `slots: {}` on reset cleared nothing (measured):
+  // CLEAR_SLOTS is an explicit "empty it" update (FIX-08).
   slots: Annotation({
-    reducer: (left, right) => ({ ...left, ...right }),
+    reducer: (left, right) => (right && right.__clear ? {} : { ...left, ...right }),
     default: () => ({}),
   }),
   // Not returned by resetNode, so a "menu"/reset command never re-triggers
@@ -294,8 +321,10 @@ const GREETING_TEXT =
 
 // --- nodes -------------------------------------------------------------------
 
+const CLEAR_SLOTS = { __clear: true };
+
 function resetNode() {
-  return { pendingMessage: null, started: false, branch: null, slotIndex: 0, slots: {} };
+  return { pendingMessage: null, started: false, branch: null, slotIndex: 0, slots: CLEAR_SLOTS };
 }
 
 function entryNode() {
@@ -380,6 +409,10 @@ const slotFillNode = (answerFreeform) => async function slotFillNode(state) {
   }
 
   const parsed = currentSlot.parse(text);
+  // A parse can decline with guidance (e.g. an estimate where an exact count is needed): stay on this slot.
+  if (parsed && typeof parsed === "object" && parsed.reprompt) {
+    return { pendingMessage: parsed.reprompt };
+  }
   if (parsed === null) {
     if (looksLikeRealQuestion(text) && !/^[0-9]+$/.test(text.trim())) {
       const answer = await answerFreeform(text);
@@ -405,7 +438,7 @@ const slotSynthesisNode = (answerFreeform) => async function slotSynthesisNode(s
   const answer = await answerFreeform(composedQuestion, BRANCH_SOURCES[state.branch], {
     retrievalQuery: BRANCH_RETRIEVAL_QUERY[state.branch],
   });
-  return { pendingMessage: answer, branch: null, slotIndex: 0, slots: {} };
+  return { pendingMessage: answer, branch: null, slotIndex: 0, slots: CLEAR_SLOTS };
 };
 
 // --- routing -------------------------------------------------------------
