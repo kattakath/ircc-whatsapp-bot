@@ -30,7 +30,7 @@ const MENU_OPTIONS_TEXT =
   "Reply with a number, or just type your question any time.";
 
 const MENU_TEXT =
-  "Hi! I can help with questions about coming to Canada, using the official IRCC website.\n\n" +
+  "Hi! I'm a helper bot (not IRCC, not a person) for questions about coming to Canada. I answer from public canada.ca pages.\n\n" +
   MENU_OPTIONS_TEXT;
 
 const MENU_SHORT_REMINDER =
@@ -287,7 +287,7 @@ const State = Annotation.Root({
 // numbered menu instead, same as MENU_TEXT, so the very first message
 // already tells her exactly how to reply.
 const GREETING_TEXT =
-  "Hey dear 👋🏽, I'm Izzy's Minion 🤓 — I can help with questions about coming to Canada, using the official IRCC website.\n\n" +
+  "Hey dear 👋🏽, I'm Izzy's Minion 🤓 — a helper bot (not IRCC, not a person) for questions about coming to Canada. I answer from public canada.ca pages.\n\n" +
   MENU_OPTIONS_TEXT;
 
 // --- nodes -------------------------------------------------------------------
@@ -315,9 +315,15 @@ function menuNode(state) {
   return { incomingText: text, pendingMessage: null, started: true };
 }
 
+// FIX-02: a chat that OPENS with a real question gets the answer at once, introduced by one
+// identity line (a bot, not IRCC, not a person: P16; California SB 1001 / EU AI Act Art. 50 as
+// precedent) instead of a greeting that ignores the question (conditional relevance, Schegloff 1968).
+const INTRO_LINE = "👋🏽 I'm Izzy's Minion 🤓, a helper bot (not IRCC, not a person). I answer from public canada.ca pages.";
+
 const quickAnswerNode = (answerFreeform) => async function quickAnswerNode(state) {
   const answer = await answerFreeform(state.incomingText);
-  return { pendingMessage: answer };
+  const pendingMessage = state.hasGreeted ? answer : `${INTRO_LINE}\n\n${answer}`;
+  return { pendingMessage, hasGreeted: true };
 };
 
 function topicPromptNode(state) {
@@ -459,7 +465,10 @@ function setSlotBranchNode(state) {
 }
 
 function routeFromRoot(state) {
-  return state.hasGreeted ? "entry" : "greeting";
+  if (state.hasGreeted) return "entry";
+  // A brand-new chat: answer a real opening question now (FIX-02); greet anything else.
+  const text = state.incomingText ?? "";
+  return looksLikeRealQuestion(text) && !isResetCommand(text) ? "quickAnswer" : "greeting";
 }
 
 function buildGraph(overrides = {}) {
@@ -485,6 +494,7 @@ function buildGraph(overrides = {}) {
   .addConditionalEdges(START, routeFromRoot, {
     greeting: "greeting",
     entry: "entry",
+    quickAnswer: "quickAnswer",
   })
   .addEdge("greeting", "entry")
   .addConditionalEdges("entry", routeFromStart, {
