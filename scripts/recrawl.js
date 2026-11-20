@@ -24,13 +24,26 @@ if (!APIFY_TOKEN) {
 }
 
 const ACTOR = "apify~website-content-crawler";
-const START_URLS = [
-  "https://www.canada.ca/en/immigration-refugees-citizenship/services/canadian-citizenship.html",
-  "https://www.canada.ca/en/immigration-refugees-citizenship/services/immigrate-canada.html",
-  "https://www.canada.ca/en/immigration-refugees-citizenship/services/study-canada.html",
-  "https://www.canada.ca/en/immigration-refugees-citizenship/services/work-canada.html",
-  "https://www.canada.ca/en/immigration-refugees-citizenship/services/visit-canada.html",
-].map((url) => ({ url }));
+const SERVICES = "https://www.canada.ca/en/immigration-refugees-citizenship/services/";
+// The five topic hubs the crawl fans out from (depth 3, capped at 300 pages).
+const HUB_PAGES = ["canadian-citizenship.html", "immigrate-canada.html", "study-canada.html", "work-canada.html", "visit-canada.html"];
+// Pages core questions depend on that the capped fan-out did not reach (2026-11-19: a
+// 44-question eval answered "1,095 days", "20 questions / 15 to pass" and the
+// work-hour limits wrongly or not at all until they were added by hand). Seeding them as
+// start URLs makes the crawl fetch them first, inside the cap, so ingest-crawl.js's
+// stale-delete keeps them. Add a page here when an answer depends on it.
+const PINNED_PAGES = [
+  // Canonical URLs: become-canadian-citizen/{eligibility,apply}.html now 301 here, and an
+  // item is keyed by its URL, so a redirecting start URL would key it unstably.
+  "canadian-citizenship/adult-minor/who.html",
+  "canadian-citizenship/adult-minor/how.html",
+  "canadian-citizenship/test/how-it-works.html",
+  "canadian-citizenship/test/study.html",
+  "canadian-citizenship/test/results.html",
+  "study-canada/work/work-on-campus.html",
+  "study-canada/work/work-off-campus.html",
+];
+const START_URLS = [...HUB_PAGES, ...PINNED_PAGES].map((p) => ({ url: SERVICES + p }));
 
 const INPUT = {
   startUrls: START_URLS,
