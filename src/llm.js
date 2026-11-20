@@ -89,6 +89,33 @@ const HIGH_STAKES_NOTE =
   "and if a deadline is mentioned, say plainly that time matters and they " +
   "should not wait to get professional help.";
 
+// FIX-16 (C13): rewrite a follow-up ("no I meant study permit", "how many hours?") into ONE
+// standalone question, using the previous questions. Gated in graph.js; measured on gpt-oss:20b
+// (5 follow-ups, 2026-11-20): median 3.0 s, max 3.5 s, all five sensible. Chat completions with
+// low reasoning effort, as measured. The rewrite also drops personal details, so it is the safe
+// search query too (P15). A hard timeout; graph.js falls back to the user's own words.
+const REWRITE_TIMEOUT_MS = Number(process.env.REWRITE_TIMEOUT_MS ?? 8_000);
+const REWRITE_SYSTEM =
+  "Rewrite the user's follow-up as ONE standalone question about Canadian immigration, using the " +
+  "previous questions for context. Drop names, ages, ID numbers and other personal details. " +
+  "Reply with the question only.";
+export async function rewrite(question, previous = []) {
+  const response = await client.chat.completions.create(
+    {
+      model: MODEL,
+      reasoning_effort: "low",
+      messages: [
+        { role: "system", content: REWRITE_SYSTEM },
+        { role: "user", content: `Previous questions:\n${previous.map((p) => `- ${p}`).join("\n")}\nFollow-up: ${question}` },
+      ],
+    },
+    { timeout: REWRITE_TIMEOUT_MS }
+  );
+  const text = response.choices?.[0]?.message?.content?.trim().split("\n")[0].replace(/^["'“]|["'”]$/g, "").trim();
+  if (!text) throw new Error("empty rewrite");
+  return text;
+}
+
 /**
  * chunks: [{ content, metadata, similarity, live? }]
  * Returns a plain-text answer suitable for a WhatsApp message.
