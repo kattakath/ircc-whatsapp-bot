@@ -42,6 +42,10 @@ const PINNED_PAGES = [
   "canadian-citizenship/test/results.html",
   "study-canada/work/work-on-campus.html",
   "study-canada/work/work-off-campus.html",
+  // 2026-11-20: an overstay question got "the pages don't explain what to do if you already
+  // overstayed" — the expired-status pages were missing (and a fee answer misstated restoration).
+  "study-canada/extend-study-permit/expired-permit.html",
+  "work-canada/extend/expired-permit.html",
 ];
 // Pinned pages OUTSIDE services/: each is a start URL AND its own exact include glob, so the
 // crawl fetches that one page without fanning out into the rest of the tree. 2026-11-20: the
@@ -49,6 +53,8 @@ const PINNED_PAGES = [
 // instructions say they can (up to 6 months). The page was missing from the corpus.
 const PINNED_OUTSIDE = [
   "https://www.canada.ca/en/immigration-refugees-citizenship/corporate/publications-manuals/operational-bulletins-manuals/service-delivery/digital-nomads.html",
+  // Restoration of temporary resident status (the 90-day rule; visitors, students, workers).
+  "https://www.canada.ca/en/immigration-refugees-citizenship/corporate/publications-manuals/operational-bulletins-manuals/temporary-residents/visitors/restoration-status.html",
 ];
 const START_URLS = [...[...HUB_PAGES, ...PINNED_PAGES].map((p) => SERVICES + p), ...PINNED_OUTSIDE].map((url) => ({ url }));
 
