@@ -73,8 +73,13 @@ export function decryptEditEnvelope(msg, { secrets, logger = console } = {}) {
     return null;
   }
   // 1:1 chats only (index.js accepts no groups): the original sender and the editor are the same
-  // person, who may be addressed by phone number or LID on either message.
-  if (msg.key?.fromMe || target.fromMe) return null;
+  // person, who may be addressed by phone number or LID on either message. targetMessageKey.fromMe
+  // is from the SENDER's side (true: the editor wrote the original; measured live 2026-11-20), so it
+  // is not checked; only an edit WE sent (the envelope's own fromMe) is skipped.
+  if (msg.key?.fromMe) {
+    logger.warn?.("[edit] our own edit; ignored");
+    return null;
+  }
   const messageSecret = secrets?.get(target.id);
   if (!messageSecret) {
     logger.warn?.("[edit] no message secret for the original (restarted, expired, or never seen)");
