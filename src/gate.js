@@ -9,7 +9,7 @@
 import { STATUS_URL } from "./redact.js";
 
 const CONTACT_URL = "https://www.canada.ca/en/immigration-refugees-citizenship/corporate/contact-ircc.html";
-const REPRESENTATIVE_URL = "https://www.canada.ca/en/immigration-refugees-citizenship/services/immigration-citizenship-representative/choose.html";
+export const REPRESENTATIVE_URL = "https://www.canada.ca/en/immigration-refugees-citizenship/services/immigration-citizenship-representative/choose.html";
 const MENU_HINT = "Ask me a question, or reply 1, 2 or 3.";
 
 export const REPLIES = {

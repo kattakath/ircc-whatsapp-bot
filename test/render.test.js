@@ -73,3 +73,9 @@ test("gpt-oss's full-width markers (【1】, 【2†L3-L5】) pick sources and n
   assert.deepEqual(r.sources, [ETA, VISIT]);
   assert.equal(r.zeroMarkers, false);
 });
+
+test("a no-break space left before punctuation by a stripped marker is removed (seen live: 'intake .')", () => {
+  const r = renderAnswer("Wait for the 2025 intake\u00a0【1】.\n\nThen apply\u202f[2] .", [chunk(VISIT, 0.9), chunk(ETA, 0.8)]);
+  assert.match(r.text, /2025 intake\. ?\n/);
+  assert.match(r.text, /Then apply\./);
+});

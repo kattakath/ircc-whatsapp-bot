@@ -2,7 +2,8 @@ import { parseControl } from "./control.js";
 import { StateGraph, Annotation, interrupt, Command, START, END } from "@langchain/langgraph";
 import { PostgresSaver } from "@langchain/langgraph-checkpoint-postgres";
 import { retrieve, topSimilarity } from "./db.js";
-import { synthesize } from "./llm.js";
+import { isHighStakes, synthesize } from "./llm.js";
+import { isMoreRequest, layoutAnswer, nextChunk } from "./layout.js";
 import { webFallback, persistWebFallback } from "./websearch.js";
 import { renderAnswer } from "./render.js";
 import { SOURCES_NONE, classifyAct, isComplaintWithContent, isShortQuestion } from "./gate.js";
@@ -280,7 +281,7 @@ const GRADE_THRESHOLD = 0.6;
 function makeAnswerFreeform({ retrieve, topSimilarity, synthesize, webFallback, persistWebFallback }) {
   // `retrievalQuery` (FIX-07): what goes to AI Search and Serper. Defaults to the question;
   // the intake summary passes a generic query so the user's profile only reaches the LOCAL model.
-  return async function answerFreeform(question, sources = null, { retrievalQuery = question } = {}) {
+  return async function answerFreeform(question, sources = null, { retrievalQuery = question, tier = "short", after = null } = {}) {
   let chunks = await retrieve(retrievalQuery, { sources });
   const gradedWell = topSimilarity(chunks) >= GRADE_THRESHOLD;
 
@@ -299,8 +300,10 @@ function makeAnswerFreeform({ retrieve, topSimilarity, synthesize, webFallback, 
 
   // FIX-04: code, not the model, owns WhatsApp formatting and the source links.
   // FIX-22: the sources travel with the text, so "show me the page" can answer from them.
-  const { text, sources: shownSources } = renderAnswer(await synthesize(question, chunks), chunks);
-  return { text, sources: shownSources };
+  // FIX-18: code owns the layout too — body cap above WhatsApp's fold, tiered disclaimer, overflow.
+  const rendered = renderAnswer(await synthesize(question, chunks), chunks);
+  const { text, remainder } = layoutAnswer({ body: rendered.body, sources: rendered.sources, tier, after });
+  return { text, sources: rendered.sources, remainder };
   };
 }
 
@@ -338,6 +341,11 @@ const State = Annotation.Root({
   awaitingContinue: Annotation({ default: () => false }),
   // FIX-15b: which recap item is being changed (0-based), or null.
   editingSlot: Annotation({ default: () => null }),
+  // FIX-18 (C9/C10): the last answer's overflow for "more" ({ text, at }), and when the full
+  // disclaimer and the menu hint were last shown — each re-shown after a 4 h session gap.
+  answerRemainder: Annotation({ default: () => null }),
+  disclaimerAt: Annotation({ default: () => 0 }),
+  hintShownAt: Annotation({ default: () => 0 }),
 });
 
 // No yes/no framing ("...do you?") — a closed question invites a
@@ -374,6 +382,7 @@ function resetNode(state) {
     noMatch: 0,
     awaitingContinue: false,
     editingSlot: null,
+    answerRemainder: null,
     bareReply: false,
   };
 }
@@ -397,15 +406,41 @@ function greetingNode() {
   return { incomingText: text, hasGreeted: true };
 }
 
+// FIX-18 (C9, C10): a session is a 4 h window (judgement call).
+const SESSION_MS = 4 * 60 * 60 * 1000;
+const fresh = (at) => !!at && Date.now() - at <= SESSION_MS;
+/** Disclaimer tier for an answer: strong for high stakes, full once per session, else short. */
+const tierFor = (state, question) => (isHighStakes(question ?? "") ? "strong" : fresh(state.disclaimerAt) ? "short" : "full");
+/** State updates after an answer: its sources, the disclaimer clock, and any overflow for "more". */
+function answered(result, tier) {
+  const u = { lastSources: result.sources };
+  if (tier !== "short") u.disclaimerAt = Date.now();
+  if (result.remainder) u.answerRemainder = { text: result.remainder, at: Date.now() };
+  return u;
+}
+
 function menuNode(state) {
+  // C10: the one-line menu hint is tapered — first answer of a session only.
+  const showHint = !!state.pendingMessage && !state.bareReply && !fresh(state.hintShownAt);
   const text = interrupt(
     state.bareReply
       ? (state.pendingMessage ?? "")
       : state.pendingMessage
-        ? `${state.pendingMessage}\n\n${MENU_SHORT_REMINDER}`
+        ? showHint
+          ? `${state.pendingMessage}\n\n${MENU_SHORT_REMINDER}`
+          : state.pendingMessage
         : MENU_TEXT
   );
-  return { incomingText: text, pendingMessage: null, bareReply: false, started: true };
+  return { incomingText: text, pendingMessage: null, bareReply: false, started: true, ...(showHint ? { hintShownAt: Date.now() } : {}) };
+}
+
+// FIX-18 (S35): "more" sends the stored overflow of the last long answer; no new search.
+const NOTHING_MORE = "That's everything I had on that. Ask me anything else.";
+function moreNode(state) {
+  const rem = state.answerRemainder;
+  if (!rem?.text || !fresh(rem.at)) return { pendingMessage: NOTHING_MORE, bareReply: true, answerRemainder: null };
+  const { text, remainder } = nextChunk(rem.text);
+  return { pendingMessage: text, bareReply: true, answerRemainder: remainder ? { text: remainder, at: rem.at } : null };
 }
 
 // FIX-09: an instant fixed reply (or silence) for a recognised dialogue act; no retrieval, no LLM.
@@ -426,11 +461,12 @@ function smallTalkNode(state) {
 const INTRO_LINE = "👋🏽 I'm Izzy's Minion 🤓, a helper bot (not IRCC, not a person). I answer from public canada.ca pages.";
 
 const quickAnswerNode = (answerFreeform) => async function quickAnswerNode(state) {
-  const { text: raw, sources: lastSources } = await answerFreeform(state.incomingText);
+  const tier = tierFor(state, state.incomingText);
+  const result = await answerFreeform(state.incomingText, null, { tier });
   // FIX-22 (C14): a complaint that still carries content is answered, opening with an apology.
-  const answer = isComplaintWithContent(state.incomingText) ? `Sorry about that — ${raw}` : raw;
+  const answer = isComplaintWithContent(state.incomingText) ? `Sorry about that — ${result.text}` : result.text;
   const pendingMessage = state.hasGreeted ? answer : `${INTRO_LINE}\n\n${answer}`;
-  return { pendingMessage, hasGreeted: true, lastSources };
+  return { pendingMessage, hasGreeted: true, ...answered(result, tier) };
 };
 
 function topicPromptNode(state) {
@@ -441,8 +477,9 @@ function topicPromptNode(state) {
 
 const topicAnswerNode = (answerFreeform) => async function topicAnswerNode(state) {
   const branch = TOPIC_BRANCHES[state.branch];
-  const { text: answer, sources: lastSources } = await answerFreeform(state.incomingText, branch.sources);
-  return { pendingMessage: answer, branch: null, lastSources };
+  const tier = tierFor(state, state.incomingText);
+  const result = await answerFreeform(state.incomingText, branch.sources, { tier });
+  return { pendingMessage: result.text, branch: null, ...answered(result, tier) };
 };
 
 function freeformPromptNode(state) {
@@ -470,8 +507,9 @@ function settlePromptNode() {
 }
 
 const freeformAnswerNode = (answerFreeform) => async function freeformAnswerNode(state) {
-  const { text: answer, sources: lastSources } = await answerFreeform(state.incomingText);
-  return { pendingMessage: answer, lastSources };
+  const tier = tierFor(state, state.incomingText);
+  const result = await answerFreeform(state.incomingText, null, { tier });
+  return { pendingMessage: result.text, ...answered(result, tier) };
 };
 
 // FIX-15 (S29): after a side question, "continue" resumes the intake and "stop" ends it.
@@ -581,14 +619,17 @@ const slotFillNode = (answerFreeform) => async function slotFillNode(state) {
     const fix = parseCorrection(text, state, slotDefs);
     if (fix) return { ...base, noMatch: 0, slots: { [fix.slot.key]: fix.value }, pendingMessage: `Updated: ${fix.slot.label} ${fix.value}.` };
     if (looksLikeRealQuestion(text) && !/^[0-9]+$/.test(text.trim())) {
-      const { text: answer, sources: lastSources } = await answerFreeform(text);
+      const tier = tierFor(state, text);
+      const after = `Continue the ${label} (${state.slotIndex} of ${slotDefs.length} done), or stop?`;
+      const result = await answerFreeform(text, null, { tier, after });
       return {
         ...base,
-        pendingMessage: `${answer}\n\nContinue the ${label} (${state.slotIndex} of ${slotDefs.length} done), or stop?`,
+        // A long answer folds behind "Read more", so the paused state is said first (FIX-18).
+        pendingMessage: `⏸️ ${capitalize(label)} paused — your question first.\n\n${result.text}`,
         bareReply: true,
         awaitingContinue: true,
         noMatch: 0,
-        lastSources,
+        ...answered(result, tier),
       };
     }
     // Escalating no-match (S28; Rasa/Google tapering): restate, then a hint, then the way out.
@@ -614,10 +655,12 @@ const slotSynthesisNode = (answerFreeform) => async function slotSynthesisNode(s
     `My profile: ${profileLine}. Based on official IRCC eligibility criteria, ` +
     `roughly how does this look, and what should I consider next? ` +
     `Be clear this is a rough, informal read — not an official score.`;
-  const { text: answer, sources: lastSources } = await answerFreeform(composedQuestion, BRANCH_SOURCES[state.branch], {
+  const tier = tierFor(state, composedQuestion);
+  const result = await answerFreeform(composedQuestion, BRANCH_SOURCES[state.branch], {
     retrievalQuery: BRANCH_RETRIEVAL_QUERY[state.branch],
+    tier,
   });
-  return { pendingMessage: answer, branch: null, slotIndex: 0, slots: CLEAR_SLOTS, lastSources };
+  return { pendingMessage: result.text, branch: null, slotIndex: 0, slots: CLEAR_SLOTS, ...answered(result, tier) };
 };
 
 // --- routing -------------------------------------------------------------
@@ -631,6 +674,7 @@ function routeFromStart(state) {
   // top-level (1-3) matching; anything else falls through to quickAnswer
   // there, which is a reasonable, honest response either way.
   if (/^\d$/.test(normalizeChoice(text))) return routeFromMenu(state);
+  if (isMoreRequest(text)) return "more";
   if (classifyAct(text)) return "smallTalk";
   if (looksLikeRealQuestion(text)) return "quickAnswer";
   return "menu";
@@ -646,6 +690,7 @@ function routeFromMenu(state) {
   if (choice === "1") return "tempPrompt";
   if (choice === "2") return "settlePrompt";
   if (choice === "3") return "freeformPrompt";
+  if (isMoreRequest(text)) return "more";
   if (classifyAct(text)) return "smallTalk";
   return "quickAnswer";
 }
@@ -700,6 +745,7 @@ function buildGraph(overrides = {}) {
   .addNode("reset", resetNode)
   .addNode("menu", menuNode)
   .addNode("smallTalk", smallTalkNode)
+  .addNode("more", moreNode)
   .addNode("quickAnswer", quickAnswerNode(answerFreeform), { retryPolicy: retryPolicy ?? RAG_RETRY })
   .addNode("tempPrompt", tempPromptNode)
   .addNode("settlePrompt", settlePromptNode)
@@ -725,6 +771,7 @@ function buildGraph(overrides = {}) {
     quickAnswer: "quickAnswer",
     smallTalk: "smallTalk",
     menu: "menu",
+    more: "more",
     reset: "reset",
     tempPrompt: "tempPrompt",
     settlePrompt: "settlePrompt",
@@ -737,9 +784,11 @@ function buildGraph(overrides = {}) {
     freeformPrompt: "freeformPrompt",
     quickAnswer: "quickAnswer",
     smallTalk: "smallTalk",
+    more: "more",
   })
   .addConditionalEdges("reset", routeFromReset, { menu: "menu", quickAnswer: "quickAnswer", smallTalk: "smallTalk" })
   .addEdge("smallTalk", "menu")
+  .addEdge("more", "menu")
   .addEdge("quickAnswer", "menu")
 
   .addConditionalEdges("tempPrompt", routeFromTempPrompt, {
