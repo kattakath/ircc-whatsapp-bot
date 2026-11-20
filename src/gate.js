@@ -112,11 +112,13 @@ export function isShortQuestion(raw) {
 // never send you an email asking for your private information", "We do not send visas by email".
 const SCAM_URL = "https://www.canada.ca/en/immigration-refugees-citizenship/services/protect-fraud/internet-email-telephone.html";
 const REPORT_URL = "https://www.canada.ca/en/immigration-refugees-citizenship/services/protect-fraud/report-fraud.html";
-export const FRAUD_CHECK =
-  "⚠️ This forwarded message has signs of a scam. IRCC says it never asks for any payment by phone and never emails you asking for private information.\n" +
+/** The fixed fraud-check reply; a pasted notice is not called "forwarded". */
+export const fraudCheck = ({ forwarded = true } = {}) =>
+  `⚠️ This ${forwarded ? "forwarded " : ""}message has signs of a scam. IRCC says it never asks for any payment by phone and never emails you asking for private information.\n` +
   "Don't pay or share any details until you check yourself, in your IRCC account or on the official site:\n" +
   `🔗 ${SCAM_URL}\n` +
   `To report it: 🔗 ${REPORT_URL}`;
+export const FRAUD_CHECK = fraudCheck({ forwarded: true });
 export const FORWARDED_PREFACE = "This was forwarded — here's what the official canada.ca pages say:";
 
 const MONEY_RE = /\$\s?\d|\b(?:pay|payment|paid|fee|fine|penalty|gift ?cards?|bitcoin|crypto|wire|transfer|deposit|western union|money ?gram|e-?transfer)\b/i;
@@ -130,8 +132,21 @@ export function isScamLike(text) {
   return (money && urgent) || (threat && (urgent || money));
 }
 
-/** What to do with a forwarded text: "fraud" (fixed reply), "forwarded" (answer with a preface), or null. */
-export function forwardedAction(inbound) {
-  if (!inbound?.forwarded || inbound.kind !== "text") return null;
-  return isScamLike(inbound.text) ? "fraud" : "forwarded";
+// FIX-39b: a PASTED notice (or one its author forwarded back, which WhatsApp does not mark) has no
+// forwarded flag, so it needs a stricter test that a person's own question cannot meet: a payment
+// rail scammers use and IRCC never does, or a notice addressed to "your" permit/visa/status.
+const SCAM_RAIL_RE = /\b(?:gift ?cards?|bitcoin|crypto(?:currency)?|western union|money ?gram|prepaid (?:visa|card))\b/i;
+const NOTICE_RE = /\byour (?:study |work )?(?:visa|permit|pr(?: card)?|status|application|file|case|sin|passport)\b[^.?!]{0,40}\b(?:is|was|has been|will be)\b/i;
+
+/** Scam signs in a pasted (not forwarded) text: scam-like AND a scam payment rail or a notice to "your" permit. */
+export function isPastedScam(text) {
+  const t = text ?? "";
+  return isScamLike(t) && (SCAM_RAIL_RE.test(t) || NOTICE_RE.test(t));
+}
+
+/** What to do with a text: "fraud" (fixed reply), "forwarded" (answer with a preface), or null (normal turn). */
+export function scamAction(inbound) {
+  if (inbound?.kind !== "text") return null;
+  if (inbound.forwarded) return isScamLike(inbound.text) ? "fraud" : "forwarded";
+  return isPastedScam(inbound.text) ? "fraud" : null;
 }
