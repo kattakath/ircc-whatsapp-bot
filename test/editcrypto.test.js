@@ -21,7 +21,7 @@ function encryptEdit({ secret, originalSenderJid, editorJid, originalId = ORIG_I
   const c = createCipheriv("aes-256-gcm", key, iv);
   c.setAAD(Buffer.alloc(0));
   const encPayload = Buffer.concat([c.update(plaintext), c.final(), c.getAuthTag()]);
-  return { secretEncType: proto.Message.SecretEncryptedMessage.SecretEncType.MESSAGE_EDIT, targetMessageKey: { id: originalId, remoteJid: USER, fromMe: false }, encPayload, encIv: iv };
+  return { secretEncType: proto.Message.SecretEncryptedMessage.SecretEncType.MESSAGE_EDIT, targetMessageKey: { id: originalId, remoteJid: USER, fromMe: true /* sender-relative: the editor wrote the original (live 2026-11-20) */ }, encPayload, encIv: iv };
 }
 
 const envelope = (sem, key = { remoteJid: USER, fromMe: false, id: "3EB0EDITENVELOPE" }) => ({ key, message: { messageContextInfo: {}, secretEncryptedMessage: sem }, messageTimestamp: 1_800_000_000 });
