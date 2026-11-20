@@ -159,6 +159,8 @@ export function renderAnswer(markdown, chunks = []) {
   // on its own line ("[2]") would otherwise leave a stray line (seen live on gpt-oss:20b).
   const tidy = body
     .replace(/[ \t]*\[\d{1,2}\](?:[ \t]*\[\d{1,2}\])*/g, "")
+    // After the strip, not before: "no fee [3] ." must become "no fee." (seen live).
+    .replace(/[ \t]+([.,;:!?])(?=\s|$)/g, "$1")
     .replace(/[ \t]+$/gm, "")
     .replace(/\n{3,}/g, "\n\n")
     .trim();

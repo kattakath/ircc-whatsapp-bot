@@ -60,3 +60,8 @@ test("[n] markers pick the sources but never show, even on their own line", () =
   assert.deepEqual(r.sources, [ETA, VISIT]);
   assert.match(r.text, /You need 1,095 days\.\n\nTime as a temporary resident counts half\.\n\n🔗 /);
 });
+
+test("no space is left before punctuation where a marker was stripped", () => {
+  const r = renderAnswer("You can ask to have them added at no fee [3] . Then apply [1] , and wait [2]!", [chunk(ETA, 0.9), chunk(VISIT, 0.8), chunk(ETA, 0.7)]);
+  assert.match(r.text, /^You can ask to have them added at no fee\. Then apply, and wait!/);
+});
