@@ -68,7 +68,7 @@ pattern, not a stylistic add-on):
 // the same soft footer used for routine questions. Kept high-precision
 // (specific terms, not broad topic words) to avoid over-triggering.
 const HIGH_STAKES_PATTERN =
-  /\b(refused|refusal|rejected|denied|denial|appeal|deported|deportation|removal order|inadmissible|inadmissibility|detained|detention|misrepresentation|overstayed|overstay|expired status|procedural fairness|humanitarian and compassionate|deadline|missed my|running out of time)\b/i;
+  /\b(refused|refusal|rejected|denied|denial|appeal|deported|deportation|removal order|inadmissible|inadmissibility|detained|detention|misrepresentation|overstayed|overstay|expired status|status (?:has |had |is |was )?(?:expired|ended)|out of status|lost (?:my |our |his |her |their )?status|(?:visa|permit|visitor record) (?:has |had |is |was )?expired|procedural fairness|humanitarian and compassionate|deadline|missed my|running out of time)\b/i;
 
 export function isHighStakes(text) {
   return HIGH_STAKES_PATTERN.test(text);
