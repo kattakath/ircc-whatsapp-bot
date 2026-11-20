@@ -6,6 +6,7 @@ import qrcode from "qrcode-terminal";
 import pino from "pino";
 import { builder, pendingPromptText } from "./graph.js";
 import { mediaReply } from "./media.js";
+import { createEditTracker, editedText, isRevoke } from "./edits.js";
 import { ANSWERED_ABOVE, createDedupe, isDedupeCandidate } from "./dedupe.js";
 import { FORWARDED_PREFACE, fraudCheck, scamAction } from "./gate.js";
 import { admit, classifyInbound, jidTag } from "./ingress.js";
@@ -72,6 +73,8 @@ const latestInbound = new Map(); // FIX-10: newest inbound id per chat
 const mediaStreak = new Map(); // FIX-23: consecutive captionless media per chat, for tapering
 const dedupe = createDedupe(); // FIX-38: resends of the same free-text question
 const seen = createSeen(); // FIX-13: message ids already handled ("append" and "notify" can repeat one)
+const edits = createEditTracker(); // FIX-14: edits and deletes, by message id
+const EDIT_PREFACE = "You edited your question — here's the updated answer:";
 
 const MAX_RECONNECT_ATTEMPTS = 3;
 let reconnectAttempts = 0;
@@ -164,13 +167,14 @@ async function start() {
 
   // Only ever called for a sender admit() already let through (see messages.upsert).
   // The turn itself lives in src/turn.js so the offline harness can drive it.
-  function processMessage(jid, inbound, sendOptions, msg, { offline = false, forwarded = false } = {}) {
-    const preface = [offline ? OFFLINE_PREFACE : null, forwarded ? FORWARDED_PREFACE : null, inbound.captioned ? CAPTION_PREFACE : null].filter(Boolean).join("\n");
+  function processMessage(jid, inbound, sendOptions, msg, { offline = false, forwarded = false, edited = false } = {}) {
+    const preface = [offline ? OFFLINE_PREFACE : null, edited ? EDIT_PREFACE : null, forwarded ? FORWARDED_PREFACE : null, inbound.captioned ? CAPTION_PREFACE : null].filter(Boolean).join("\n");
     return handleTurn({
       jid,
       message: msg,
       // A late answer always quotes the message it answers (S23).
-      newerInbound: () => offline || latestInbound.get(jid) !== msg?.key?.id,
+      // An edit's re-answer quotes the edited message too (S24).
+      newerInbound: () => offline || edited || latestInbound.get(jid) !== msg?.key?.id,
       text: inbound.text,
       preface: preface || null,
       sendOptions,
@@ -185,7 +189,7 @@ async function start() {
 
   // Everything an inbound message may trigger, for live and offline messages alike. Runs inside
   // the per-chat queue; the allowlist gate (FIX-40) comes first on BOTH paths.
-  async function handleInbound(msg, inbound, { offline = false } = {}) {
+  async function handleInbound(msg, inbound, { offline = false, edited = false } = {}) {
     const jid = msg.key.remoteJid;
     // Allowlist FIRST (FIX-40): nothing below may send, set presence or log
     // message text for a sender who is not admitted.
@@ -200,6 +204,16 @@ async function start() {
       }
       return;
     }
+
+    // FIX-14: a message deleted while it waited in the queue is never answered (S25); an edit
+    // that arrived while it waited replaces its text (S24). begin() runs before every check
+    // below, so the ID-number and scam checks see the edited text.
+    const id = msg.key.id;
+    if (edits.isRevoked(id)) {
+      console.log(`[revoked] #${jidTag(jid)} deleted before it was answered; not processed`);
+      return;
+    }
+    if (inbound.kind === "text") inbound = { ...inbound, text: edits.begin(id, inbound.text) };
 
     // Reply inside the same disappearing-message timer the user chose (FIX-05).
     const sendOptions = inbound.ephemeralExpiration ? { ephemeralExpiration: inbound.ephemeralExpiration } : undefined;
@@ -262,8 +276,18 @@ async function start() {
       return;
     }
     if (dedupeKey) dedupe.start(dedupeKey);
-    const result = await processMessage(jid, inbound, sendOptions, msg, { offline, forwarded: fwd === "forwarded" });
+    const result = await processMessage(jid, inbound, sendOptions, msg, { offline, edited, forwarded: fwd === "forwarded" });
     if (dedupeKey) (result?.reply ? dedupe.finish(dedupeKey, result.sent) : dedupe.fail(dedupeKey));
+    if (!result?.reply) {
+      edits.fail(id);
+      return;
+    }
+    // FIX-14: an edit that changed the meaning while this answer was in flight is answered next.
+    const again = edits.finish(id, inbound.text);
+    if (again) {
+      console.log(`[edit] #${jidTag(jid)} edited in flight; re-answering`);
+      enqueue(jid, () => handleInbound({ key: msg.key, message: { conversation: again } }, { ...inbound, text: again }, { edited: true }));
+    }
   }
 
   // FIX-13: one note for an offline backlog older than the window, quoting its newest message.
@@ -314,6 +338,27 @@ async function start() {
         latestInbound.set(jid, msg.key.id);
         enqueue(jid, () => handleInbound(msg, inbound, { offline: true }));
       }
+    }
+  });
+
+  // FIX-14: edits and "delete for everyone" arrive as messages.update (Baileys MESSAGE_EDIT/REVOKE).
+  // The edit's upsert (an editedMessage protocol message) is "other" in classifyInbound: nothing.
+  sock.ev.on("messages.update", (updates) => {
+    for (const { key, update } of updates) {
+      const jid = key?.remoteJid ?? "";
+      if (!key?.id || key.fromMe || !(jid.endsWith("@s.whatsapp.net") || jid.endsWith("@lid"))) continue;
+      if (isRevoke(update)) {
+        edits.onRevoke(key.id);
+        continue;
+      }
+      const text = editedText(update);
+      if (!text) continue;
+      const action = edits.onEdit(key.id, text);
+      if (action === "typo") console.log(`[edit] #${jidTag(jid)} typo-only edit; not re-answered`);
+      if (action !== "reanswer") continue;
+      console.log(`[edit] #${jidTag(jid)} edit changed the meaning; re-answering`);
+      const inbound = { kind: "text", text, captioned: false, forwarded: false };
+      enqueue(jid, () => handleInbound({ key, message: { conversation: text } }, inbound, { edited: true }));
     }
   });
 }
