@@ -125,17 +125,40 @@ async function intoCitizenshipIntake(h) {
 }
 const slotsOf = async (h) => (await h.graph.getState({ configurable: { thread_id: h.jid } })).values.slots ?? {};
 
-test("FIX-08: 'about 2 or 3 years' is never stored as 23 days", { todo: "FIX-08" }, async () => {
-  const h = makeHarness();
-  await intoCitizenshipIntake(h);
-  await h.turn("2 or 3 years");
-  assert.notEqual((await slotsOf(h)).yearsPresent, 23);
+test("S14 (FIX-08): an estimate or a range is never stored as a day count; it gets the calculator", async () => {
+  for (const estimate of ["2 or 3 years", "about 3 years", "around 1000", "1000-1100 days", "not sure"]) {
+    const h = makeHarness();
+    await intoCitizenshipIntake(h);
+    const r = await h.turn(estimate);
+    assert.equal((await slotsOf(h)).yearsPresent, undefined, `"${estimate}" was stored`);
+    assert.match(r.sends.at(-1), /physical-presence\.html/, `"${estimate}" did not get the calculator`);
+  }
 });
 
-test("FIX-08: 'start over' during intake clears the stored answers", { todo: "FIX-08" }, async () => {
+test("S14 (FIX-08): an exact day count is stored as written", async () => {
+  for (const [exact, n] of [["1100", 1100], ["1,100 days", 1100], ["1095", 1095]]) {
+    const h = makeHarness();
+    await intoCitizenshipIntake(h);
+    await h.turn(exact);
+    assert.equal((await slotsOf(h)).yearsPresent, n, exact);
+  }
+});
+
+test("S15/S40 (FIX-08): ok, 👍, haan and nahi answer a yes/no prompt", async () => {
+  for (const [reply, want] of [["ok", "yes"], ["👍", "yes"], ["haan", "yes"], ["Yes please!", "yes"], ["nahi", "no"], ["👎", "no"]]) {
+    const h = makeHarness();
+    await h.turn("hi");
+    await h.turn("2");
+    await h.turn("2"); // "PR status? yes or no"
+    await h.turn(reply);
+    assert.equal((await slotsOf(h)).prStatus, want, reply);
+  }
+});
+
+test("FIX-08: 'start over' during intake clears the stored answers", async () => {
   const h = makeHarness();
   await intoCitizenshipIntake(h);
-  assert.equal((await slotsOf(h)).prStatus, true, "precondition: an answer is stored");
+  assert.equal((await slotsOf(h)).prStatus, "yes", "precondition: an answer is stored");
   await h.turn("start over");
   assert.deepEqual(await slotsOf(h), {});
 });
