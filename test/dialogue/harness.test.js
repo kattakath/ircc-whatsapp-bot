@@ -264,6 +264,7 @@ test("S13: the intake profile reaches the local model but never the search queri
   await h.turn("2"); // settle
   await h.turn("1"); // PR intake
   for (const a of ["34", "4", "2", "3", "no", "no"]) await h.turn(a);
+  await h.turn("OK"); // FIX-15b: the recap waits for OK before synthesis
   const summary = h.calls.synthesize.at(-1).question;
   assert.match(summary, /34/, "the local synthesis input carries the profile");
   for (const { question } of [...h.calls.retrieve, ...h.calls.webFallback.map((q) => ({ question: q }))]) {
