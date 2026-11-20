@@ -88,11 +88,24 @@ test("L1: digits at the menu route to the topic prompts without RAG", async () =
 
 // --- Known defects (desired behaviour; red until the named fix lands) --------------------
 
-test("FIX-02: the very first message is answered, not swallowed by the greeting", { todo: "FIX-02" }, async () => {
+test("S01 (FIX-02): the very first message is answered in ONE reply, with the identity line", async () => {
   const h = makeHarness();
   const r = await h.turn("How do I renew my PR card?");
   assert.equal(h.calls.retrieve.length, 1);
-  assert.match(r.sends.at(-1), /Answer to: How do I renew my PR card\?/);
+  assert.equal(r.sends.length, 1);
+  assert.match(r.sends[0], /^👋🏽 I'm Izzy's Minion 🤓, a helper bot \(not IRCC, not a person\)/);
+  assert.match(r.sends[0], /Answer to: How do I renew my PR card\?/);
+  const r2 = await h.turn("And for a child?");
+  assert.ok(!r2.sends[0].includes("helper bot"), "the intro appears once per chat");
+});
+
+test("S02 (FIX-02): a greeting gets the identity line and the menu, no RAG, no 'official IRCC website'", async () => {
+  const h = makeHarness();
+  const r = await h.turn("hi");
+  assert.equal(h.calls.retrieve.length, 0);
+  assert.match(r.sends[0], /not IRCC, not a person/);
+  assert.match(r.sends[0], /1\) Visit/);
+  assert.ok(!/official IRCC website/.test(r.sends[0]));
 });
 
 test("FIX-09: a bare 'thanks' does not trigger retrieval and the LLM", { todo: "FIX-09" }, async () => {

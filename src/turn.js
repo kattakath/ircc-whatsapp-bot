@@ -7,7 +7,8 @@
 import { Command } from "@langchain/langgraph";
 import { jidTag } from "./ingress.js";
 
-export const FILLER_TEXT = "One sec — checking the official IRCC info... 🍁";
+// FIX-02: says what is happening and roughly how long, without claiming to be official.
+export const FILLER_TEXT = "One sec — checking canada.ca, this usually takes about 30 seconds…";
 export const ERROR_TEXT = "Sorry, something went wrong on my end — try again in a moment.";
 export const OFFICIAL_LINK = "https://www.canada.ca/en/immigration-refugees-citizenship.html";
 // FIX-03 repair: name the failed question, say it is saved, offer *again* and the official
