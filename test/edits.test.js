@@ -64,3 +64,16 @@ test("the tracker is bounded", () => {
   assert.equal(t.onEdit("m0", "a totally different question about work permits"), "pending", "m0 was evicted: unknown, not re-answered");
   assert.equal(t.size() <= 3 * 3, true);
 });
+
+test("short words get no typo tolerance: PR→PN and TRV→TRP change the meaning", () => {
+  assert.equal(isMeaningfulEdit("Can I apply for PR?", "Can I apply for PN?"), true);
+  assert.equal(isMeaningfulEdit("How long is a TRV valid", "How long is a TRP valid"), true);
+  assert.equal(isMeaningfulEdit("What is the fee", "What are the fees"), false, "fee→fees is still a typo");
+});
+
+test("a message answered by a fixed reply (ID number, scam, 'answered above') is settled, so a later edit is re-answered", () => {
+  const t = createEditTracker();
+  t.begin("m1", "my UCI is 1234-5678, status?");
+  assert.equal(t.finish("m1", ""), null, "settled with no text kept");
+  assert.equal(t.onEdit("m1", "How do I check my application status?"), "reanswer");
+});

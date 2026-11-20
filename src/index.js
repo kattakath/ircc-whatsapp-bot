@@ -214,6 +214,14 @@ async function start() {
       return;
     }
     if (inbound.kind === "text") inbound = { ...inbound, text: edits.begin(id, inbound.text) };
+    // Every text that got a reply is settled, fixed replies included, so a later edit is seen.
+    // `answeredText` "" keeps no text (the ID-number path): any content edit is then re-answered.
+    const settle = (answeredText) => {
+      const again = edits.finish(id, answeredText);
+      if (!again) return;
+      console.log(`[edit] #${jidTag(jid)} edited in flight; re-answering`);
+      enqueue(jid, () => handleInbound({ key: msg.key, message: { conversation: again } }, { ...inbound, text: again }, { edited: true }));
+    };
 
     // Reply inside the same disappearing-message timer the user chose (FIX-05).
     const sendOptions = inbound.ephemeralExpiration ? { ephemeralExpiration: inbound.ephemeralExpiration } : undefined;
@@ -228,6 +236,7 @@ async function start() {
       } catch (err) {
         console.error("Failed to send the ID-number reply:", err);
       }
+      settle("");
       return;
     }
 
@@ -257,6 +266,7 @@ async function start() {
     if (fwd === "fraud") {
       console.log(`[fraud-check] #${jidTag(jid)} ${inbound.forwarded ? "forwarded" : "pasted"} scam-like text; not processed`);
       await sender.send(jid, { text: fraudCheck({ forwarded: inbound.forwarded }) }, { ...sendOptions, quoted: msg });
+      settle(inbound.text);
       return;
     }
 
@@ -273,6 +283,7 @@ async function start() {
     if (earlier?.status === "answered") {
       console.log(`[dedupe] #${jidTag(jid)} resent an answered question`);
       await sender.send(jid, { text: ANSWERED_ABOVE }, earlier.sent ? { ...sendOptions, quoted: earlier.sent } : sendOptions);
+      settle(inbound.text);
       return;
     }
     if (dedupeKey) dedupe.start(dedupeKey);
@@ -283,11 +294,7 @@ async function start() {
       return;
     }
     // FIX-14: an edit that changed the meaning while this answer was in flight is answered next.
-    const again = edits.finish(id, inbound.text);
-    if (again) {
-      console.log(`[edit] #${jidTag(jid)} edited in flight; re-answering`);
-      enqueue(jid, () => handleInbound({ key: msg.key, message: { conversation: again } }, { ...inbound, text: again }, { edited: true }));
-    }
+    settle(inbound.text);
   }
 
   // FIX-13: one note for an offline backlog older than the window, quoting its newest message.
