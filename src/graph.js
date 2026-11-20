@@ -609,4 +609,10 @@ function buildGraph(overrides = {}) {
 // The production graph, with the real dependencies (index.js, simulate.js).
 const builder = buildGraph();
 
-export { builder, buildGraph, State };
+// FIX-23: the pending intake question, if the chat is mid-intake (so a media reply can restate it).
+function pendingPromptText(values = {}) {
+  const slots = BRANCH_SLOTS[values.branch];
+  return slots?.[values.slotIndex ?? 0]?.prompt ?? null;
+}
+
+export { builder, buildGraph, pendingPromptText, State };

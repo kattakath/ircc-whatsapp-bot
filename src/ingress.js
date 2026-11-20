@@ -47,7 +47,8 @@ export function classifyInbound(message, { normalize = normalizeMessageContent }
   const caption = content.imageMessage?.caption ?? content.videoMessage?.caption ?? content.documentMessage?.caption ?? "";
   if (caption.trim()) return { kind: "text", text: caption, captioned: true, ...meta };
 
-  if (MEDIA_TYPES.some((k) => content[k])) return { kind: "media", ...meta };
+  const mediaKey = MEDIA_TYPES.find((k) => content[k]);
+  if (mediaKey) return { kind: "media", mediaType: mediaKey.replace("Message", ""), ...meta }; // image|video|audio|document|sticker
   return { kind: "other" };
 }
 

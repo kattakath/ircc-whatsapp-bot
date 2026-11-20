@@ -4,7 +4,8 @@ import { makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaile
 import { PostgresSaver } from "@langchain/langgraph-checkpoint-postgres";
 import qrcode from "qrcode-terminal";
 import pino from "pino";
-import { builder } from "./graph.js";
+import { builder, pendingPromptText } from "./graph.js";
+import { mediaReply } from "./media.js";
 import { admit, classifyInbound, jidTag } from "./ingress.js";
 import { CAPTION_PREFACE, FILLER_TEXT, handleTurn } from "./turn.js";
 import { createHolder, createQueues, createSender } from "./outbox.js";
@@ -66,6 +67,7 @@ const holder = createHolder();
 const enqueue = createQueues();
 const sender = createSender(holder, new Map(), console, { dropOnFlush: [FILLER_TEXT] });
 const latestInbound = new Map(); // FIX-10: newest inbound id per chat
+const mediaStreak = new Map(); // FIX-23: consecutive captionless media per chat, for tapering
 const seen = createSeen(); // FIX-13: message ids already handled ("append" and "notify" can repeat one)
 
 const MAX_RECONNECT_ATTEMPTS = 3;
@@ -213,17 +215,25 @@ async function start() {
     }
 
     if (inbound.kind === "media") {
-      // Silence would look exactly like a broken bot: nudge an admitted
-      // sender who sent a photo/voice note/document with no caption.
+      // FIX-23: a line per media kind, restating a pending intake question; a sticker gets none.
+      const repeat = (mediaStreak.get(jid) ?? 0) > 0;
+      mediaStreak.set(jid, (mediaStreak.get(jid) ?? 0) + 1);
+      let pendingPrompt = null;
       try {
-        await sender.send(jid, {
-          text: "I can only read text messages right now — could you type your question instead?",
-        }, sendOptions);
+        pendingPrompt = pendingPromptText((await graph.getState({ configurable: { thread_id: jid } })).values);
+      } catch {
+        /* no state yet: no question to restate */
+      }
+      const text = mediaReply({ mediaType: inbound.mediaType, pendingPrompt, repeat });
+      if (!text) return;
+      try {
+        await sender.send(jid, { text }, sendOptions);
       } catch (err) {
         console.error("Failed to send media-nudge reply:", err);
       }
       return;
     }
+    mediaStreak.delete(jid);
 
     await processMessage(jid, inbound, sendOptions, msg, { offline });
   }
