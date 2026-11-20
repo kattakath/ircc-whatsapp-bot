@@ -1,0 +1,25 @@
+{
+  "about": "FIX-01 gate-collision corpus (docs/conversation-design.md §7): short, messy, non-question replies a real user sends at a prompt. None of them is a question that needs retrieval; each one that reaches RAG is a false positive. Synthetic, no real chats.",
+  "atMenu": [
+    "ok",
+    "👍",
+    "thanks",
+    "thank you so much!!",
+    "no",
+    "yes",
+    "hello??",
+    "hello?? are you there",
+    "sorry",
+    "sorry wrong number",
+    "haan",
+    "ok cool thanks",
+    "menu",
+    "1.",
+    "2",
+    "wait",
+    "wait I'm 34",
+    "never mind",
+    "lol",
+    "🙏🙏"
+  ]
+}

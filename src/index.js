@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 import "dotenv/config";
 import { makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } from "@whiskeysockets/baileys";
-import { Command } from "@langchain/langgraph";
 import { PostgresSaver } from "@langchain/langgraph-checkpoint-postgres";
 import qrcode from "qrcode-terminal";
 import pino from "pino";
 import { builder } from "./graph.js";
 import { admit, classifyInbound, jidTag } from "./ingress.js";
+import { handleTurn } from "./turn.js";
 
 // One checkpointer/compiled graph shared across the whole process — on the
 // local Postgres at RAGDB_URI (retrieval itself is Cloudflare AI Search, see
@@ -139,84 +139,15 @@ async function start() {
   });
 
   // Only ever called for a sender admit() already let through (see messages.upsert).
-  async function processMessage(jid, text) {
-    console.log(`[in]  ${jid}: ${text}`);
-
-    let answered = false;
-    let presenceInterval = null;
-    let fillerTimer = null;
-
-    try {
-      await sock.sendPresenceUpdate("composing", jid);
-
-      // A deep-reasoning synthesis model can take 30-60s. This is
-      // deliberately NOT inside a graph node (a node re-executes from its
-      // top on resume-after-crash, so any side effect before its interrupt()
-      // would double-fire) — instead plain timers here handle it, decoupled
-      // from which internal node happens to be slow.
-
-      // WhatsApp's "composing" indicator isn't persistent — it has a short
-      // TTL (~10-25s) and silently disappears if not refreshed. A single
-      // send at the start looks like it stopped typing well before a
-      // 30-90s reply actually arrives. Keep refreshing it periodically.
-      presenceInterval = setInterval(() => {
-        if (answered) return; // belt-and-suspenders alongside clearInterval in finally
-        sock.sendPresenceUpdate("composing", jid).catch((err) => {
-          console.error("Failed to refresh composing presence:", err);
-        });
-      }, 8000);
-
-      fillerTimer = setTimeout(async () => {
-        if (answered) return; // avoid a filler landing just after the real reply
-        try {
-          await sock.sendMessage(jid, { text: "One sec — checking the official IRCC info... 🍁" });
-        } catch (err) {
-          console.error("Failed to send slow-reply filler:", err);
-        }
-      }, 4000);
-
-      const config = { configurable: { thread_id: jid } };
-      const snapshot = await graph.getState(config);
-      const isFreshThread = snapshot.next.length === 0;
-      // A conversation abandoned mid-intake for a week+ (she dropped off,
-      // came back later expecting a clean slate) resuming stale slot
-      // answers from memory would be confusing, not helpful — treat it as
-      // a fresh start instead. createdAt is the last checkpoint's
-      // timestamp, so this only fires on genuinely old, untouched threads.
-      const STALE_MS = 7 * 24 * 60 * 60 * 1000;
-      const isStale = snapshot.createdAt && Date.now() - new Date(snapshot.createdAt).getTime() > STALE_MS;
-      const input =
-        isFreshThread || isStale ? { incomingText: text } : new Command({ resume: text });
-      const result = await graph.invoke(input, config);
-
-      const reply = result.__interrupt__?.[0]?.value;
-      if (!reply) {
-        // Shouldn't happen — the graph always loops back to a node that
-        // interrupts — but don't leave the user hanging if it ever does.
-        throw new Error(`Graph returned no interrupt to reply with: ${JSON.stringify(result)}`);
-      }
-
-      console.log(`[out] ${jid}: ${reply.slice(0, 120)}${reply.length > 120 ? "..." : ""}`);
-      await sock.sendMessage(jid, { text: reply });
-    } catch (err) {
-      // The allowlist check no longer runs here (it is admit() at ingress), so
-      // this only ever answers an admitted sender whose turn failed.
-      console.error("Error handling message:", err);
-      try {
-        await sock.sendMessage(jid, {
-          text: "Sorry, something went wrong on my end — try again in a moment.",
-        });
-      } catch (sendErr) {
-        console.error("Also failed to send the error reply:", sendErr);
-      }
-    } finally {
-      // Always clean up, whether we succeeded, errored, or returned early
-      // (e.g. not-allowlisted) — an uncleared interval here would otherwise
-      // ping presence updates for this jid forever.
-      answered = true;
-      if (fillerTimer) clearTimeout(fillerTimer);
-      if (presenceInterval) clearInterval(presenceInterval);
-    }
+  // The turn itself lives in src/turn.js so the offline harness can drive it.
+  function processMessage(jid, text) {
+    return handleTurn({
+      jid,
+      text,
+      graph,
+      send: (to, content) => sock.sendMessage(to, content),
+      presence: (state, to) => sock.sendPresenceUpdate(state, to),
+    });
   }
 
   // Serialize processing per sender: without this, a burst of messages sent
