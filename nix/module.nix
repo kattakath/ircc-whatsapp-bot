@@ -44,14 +44,18 @@
 let
   cfg = config.services.irccWhatsappBot;
 
-  # env var -> Keychain service. The three secrets are always looked up, under
-  # their own names unless `keychainServices` maps them elsewhere.
+  # env var -> Keychain service. The secrets are always looked up, under their own
+  # names unless `keychainServices` maps them elsewhere. OPENAI_API_KEY is skipped
+  # when `openaiBaseUrl` points elsewhere (a local Ollama needs no key, and the real
+  # key should not travel to it), unless `keychainServices` maps it explicitly.
   keychainMap =
-    lib.genAttrs [
-      "OPENAI_API_KEY"
-      "SERPER_API_KEY"
-      "LANGCHAIN_API_KEY"
-    ] lib.id
+    lib.genAttrs (
+      [
+        "SERPER_API_KEY"
+        "LANGCHAIN_API_KEY"
+      ]
+      ++ lib.optional (cfg.openaiBaseUrl == null) "OPENAI_API_KEY"
+    ) lib.id
     // cfg.keychainServices;
 
   fromKeychain = name: pkgs.stdenv.hostPlatform.isDarwin && cfg.keychainServices ? ${name};
@@ -80,6 +84,13 @@ let
   runner = pkgs.writeShellScriptBin "ircc-whatsapp-bot-run" ''
     set -eu
     ${secretsPrelude}
+    ${lib.optionalString (cfg.openaiBaseUrl != null) ''
+      # The OpenAI SDK reads OPENAI_BASE_URL itself; it still refuses an empty key,
+      # which a local server ignores.
+      export OPENAI_BASE_URL=${lib.escapeShellArg cfg.openaiBaseUrl}
+      : "''${OPENAI_API_KEY:=not-needed}"
+      export OPENAI_API_KEY
+    ''}
     if [ -z "''${OPENAI_API_KEY:-}" ] || [ -z "''${SERPER_API_KEY:-}" ]; then
       echo "ircc-whatsapp-bot: missing OPENAI_API_KEY and/or SERPER_API_KEY -- set services.irccWhatsappBot.environmentFile, or on Darwin: secret set OPENAI_API_KEY <key> / secret set SERPER_API_KEY <key>" >&2
       exit 1
@@ -148,7 +159,20 @@ in
     model = lib.mkOption {
       type = lib.types.str;
       default = "gpt-5.5";
-      description = "OpenAI model for synthesis (overrides src/llm.js's own default via OPENAI_MODEL).";
+      description = "Model for synthesis (overrides src/llm.js's own default via OPENAI_MODEL). With `openaiBaseUrl`, a model that endpoint serves, e.g. an Ollama tag.";
+    };
+
+    openaiBaseUrl = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      example = "http://127.0.0.1:11434/v1";
+      description = ''
+        Any endpoint that speaks the OpenAI Responses API (exported as
+        OPENAI_BASE_URL, which the OpenAI SDK reads itself), e.g. a local Ollama.
+        Null means api.openai.com. When set, OPENAI_API_KEY is no longer looked
+        up in the Keychain or required; map `keychainServices.OPENAI_API_KEY`
+        for an endpoint that does need a key.
+      '';
     };
 
     langsmithTracing = lib.mkOption {

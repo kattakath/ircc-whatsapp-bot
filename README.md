@@ -243,7 +243,11 @@ Supported systems: `x86_64-linux`, `aarch64-linux`, `aarch64-darwin`
 See `nix/module.nix` for the full option surface (`package`, `stateDir`,
 `model`, `langsmithTracing`/`langsmithProject`, `aiSearch.accountId`/
 `aiSearch.instance`, `ragdbUri`, `localRag.enable`, `environmentFile`,
-`keychainServices`).
+`keychainServices`, `openaiBaseUrl`).
+`openaiBaseUrl` points synthesis at any OpenAI-Responses-compatible endpoint
+instead of api.openai.com: a local Ollama works as-is
+(`openaiBaseUrl = "http://127.0.0.1:11434/v1"; model = "qwen3-vl:4b-instruct";`),
+and then no OpenAI key is looked up or needed.
 `aiSearch.accountId` is the Cloudflare account id (set it in the consuming
 flake, or put `CF_ACCOUNT_ID` in `environmentFile`). Secrets
 (`OPENAI_API_KEY`/`SERPER_API_KEY`/`LANGCHAIN_API_KEY`/
