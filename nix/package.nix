@@ -17,7 +17,7 @@ buildNpmPackage {
   version = "0.1.0";
   src = ../.;
 
-  npmDepsHash = "sha256-l+Q3DzEbtxCK1KhnWBWtgP1mZIzStXXN0u2DlUMkveY=";
+  npmDepsHash = "sha256-gEo1wq/b0ywolFOvETyphGI3sejA79qmkX9TBp20QRk=";
 
   # No "build" script in package.json — plain JS, nothing to bundle.
   dontNpmBuild = true;
