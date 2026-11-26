@@ -9,3 +9,4 @@ result
 
 # direnv (the generated .envrc); .envrc.local holds per-machine variables
 .envrc.local
+.DS_Store
