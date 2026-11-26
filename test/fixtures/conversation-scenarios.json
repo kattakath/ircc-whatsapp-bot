@@ -1,0 +1,1297 @@
+[
+ {
+  "id": "S01",
+  "title": "First message is a real question",
+  "category": "opening",
+  "covers_fix": [
+   "FIX-02",
+   "FIX-18"
+  ],
+  "turns": [
+   {
+    "user": "[new chat] How many days do I need in Canada for citizenship?",
+    "expect": "ONE reply: a one-line intro saying it is a family helper bot, not IRCC, plus a grounded answer (1,095 days in 5 years) and the official calculator link. It ends with the tapered one-line menu hint (first answer of the session, C10), not the numbered greeting menu. synthesize is called on turn 1."
+   }
+  ]
+ },
+ {
+  "id": "S02",
+  "title": "Greeting only, then greeting again",
+  "category": "opening",
+  "covers_fix": [
+   "FIX-02",
+   "FIX-09",
+   "FIX-38"
+  ],
+  "turns": [
+   {
+    "user": "[new chat] hi",
+    "expect": "A greeting with the identity line, plus the 3-option menu. No synthesize call. GREETING_TEXT no longer says 'official IRCC website'."
+   },
+   {
+    "user": "hi",
+    "expect": "A short nudge ('Ask me anything, or reply 1, 2 or 3'), not the full menu. No RAG. Not absorbed by content dedupe (C19)."
+   }
+  ]
+ },
+ {
+  "id": "S03",
+  "title": "Terminal error, then a NEW question",
+  "category": "error-recovery",
+  "covers_fix": [
+   "FIX-03",
+   "FIX-01"
+  ],
+  "turns": [
+   {
+    "user": "What is the fee for a study permit? [synthesize fails after retries]",
+    "expect": "One message that names the failed question, says it is saved, and offers *again* plus a canada.ca link. No 'try again in a moment'."
+   },
+   {
+    "user": "What about a visitor visa?",
+    "expect": "The retrieval query is the visitor-visa question, and the answer is about visitor visas."
+   },
+   {
+    "user": "try again",
+    "expect": "Matched as *again*. The study-permit fee question is re-run and answered, quoting the original message (from the in-memory slot). After a simulated restart, the question is restated as text, with no quote."
+   }
+  ]
+ },
+ {
+  "id": "S04",
+  "title": "Transient error retried silently",
+  "category": "error-recovery",
+  "covers_fix": [
+   "FIX-03"
+  ],
+  "turns": [
+   {
+    "user": "How long is a study permit valid? [AI Search 500 once, then OK]",
+    "expect": "A normal answer. No error is shown. retryPolicy recorded 2 attempts, within the deadline."
+   }
+  ]
+ },
+ {
+  "id": "S05",
+  "title": "Error during a mid-intake side question",
+  "category": "error-recovery",
+  "covers_fix": [
+   "FIX-03",
+   "FIX-15"
+  ],
+  "turns": [
+   {
+    "user": "2",
+    "expect": "Settle prompt."
+   },
+   {
+    "user": "1",
+    "expect": "PR intake: age prompt."
+   },
+   {
+    "user": "what counts as skilled work? [synthesize fails]",
+    "expect": "A recoverable error that restates 'How old are you?'."
+   },
+   {
+    "user": "25",
+    "expect": "age=25, then the education prompt, NOT the main menu. branch and slotIndex are intact."
+   }
+  ]
+ },
+ {
+  "id": "S06",
+  "title": "Model hangs; user escapes",
+  "category": "waiting-time",
+  "covers_fix": [
+   "FIX-03",
+   "FIX-11",
+   "FIX-12"
+  ],
+  "turns": [
+   {
+    "user": "What are the work-hour limits for students? [synthesize never resolves and ignores its signal]",
+    "expect": "Composing, then ONE filler text at ~4 s ('checking canada.ca, usually about 30 s'), armed by the retrieval event. Without the next turn: 'still working' at ~60 s; at 120 s the node timeout raises NodeTimeoutError, retryOn does NOT retry it (exactly 1 attempt recorded), composing stops and one recoverable message is sent. Total wall time <= ~120 s, never ~240 s. No reaction is ever sent."
+   },
+   {
+    "user": "[t=30s] menu",
+    "expect": "The static menu at ~t=30 s, sent by the transport. The in-flight run's 60 s line and 120 s deadline message are cancelled, and its reply is never sent. The deferred reset produces no second menu message, and pendingMessage is null afterwards. graph.invoke is never re-entered concurrently. A message typed at t=40 s waits behind the held run (known residual)."
+   }
+  ]
+ },
+ {
+  "id": "S07",
+  "title": "Model emits Markdown",
+  "category": "formatting",
+  "covers_fix": [
+   "FIX-04"
+  ],
+  "turns": [
+   {
+    "user": "What does an eTA cost? [stub returns '## Fees\\n**Fee:** $7 [1]\\n*Note:* online only\\n| Item | Cost |\\n|---|---|\\n| eTA | $7 |\\n1. Apply online\\n2. Pay the fee\\nUse form `IMM 5257`']",
+    "expect": "Rendered as '*Fees*', '*Fee:* $7', '_Note:_ online only', '• eTA — $7', 'Step 1: Apply online', 'Step 2: Pay the fee' and 'Use form IMM 5257' (no backticks). No '**', '#' or '|', and no line starts with a bare digit. The oracle passes."
+   },
+   {
+    "user": "[assert] SYSTEM_PROMPT",
+    "expect": "No longer contains the 'single asterisks' rule. It asks for plain Markdown, [n] citations and no URLs."
+   }
+  ]
+ },
+ {
+  "id": "S08",
+  "title": "Invented URL is stripped; sources come from metadata, with or without markers",
+  "category": "incorrect-response",
+  "covers_fix": [
+   "FIX-04"
+  ],
+  "turns": [
+   {
+    "user": "Do I need a visa to visit from India? [stub cites https://www.canadaca.ca/visit and [1]; chunk 1 url = canada.ca visit page]",
+    "expect": "Only the canada.ca chunk URL appears, and 'canadaca.ca' is absent. The dropped-URL counter is 1."
+   },
+   {
+    "user": "send me the link",
+    "expect": "The same metadata URL, from lastSources."
+   },
+   {
+    "user": "Can I extend my stay? [stub answer has NO [n] markers; chunks retrieved with grade >= 0.6]",
+    "expect": "The answer is SENT (no abstain), with the top 2 retrieved canada.ca URLs rendered by code. The zero-marker counter is 1."
+   }
+  ]
+ },
+ {
+  "id": "S09",
+  "title": "Disappearing-mode wrapped message",
+  "category": "platform",
+  "covers_fix": [
+   "FIX-05"
+  ],
+  "turns": [
+   {
+    "user": "[ephemeralMessage{extendedTextMessage:'How long is a visitor visa valid?'}, expiration 24h]",
+    "expect": "A normal answer (today: silence). The reply carries an ephemeralExpiration that matches the chat."
+   }
+  ]
+ },
+ {
+  "id": "S10",
+  "title": "Captioned photo, then caption-less photo mid-intake",
+  "category": "unexpected-input",
+  "covers_fix": [
+   "FIX-05",
+   "FIX-23"
+  ],
+  "turns": [
+   {
+    "user": "[image, caption: 'what does this biometrics letter mean?']",
+    "expect": "An answer about biometrics, prefixed 'I can't open photos yet, so I'm answering from your caption'."
+   },
+   {
+    "user": "2",
+    "expect": "Settle prompt."
+   },
+   {
+    "user": "1",
+    "expect": "Age prompt."
+   },
+   {
+    "user": "[image, no caption]",
+    "expect": "'I can't read photos yet — How old are you? (just the number)'. The slot is unchanged."
+   }
+  ]
+ },
+ {
+  "id": "S11",
+  "title": "Web fallback returns an off-domain page; long query",
+  "category": "grounding",
+  "covers_fix": [
+   "FIX-06"
+  ],
+  "turns": [
+   {
+    "user": "[60-word synthetic question; retrieval grades < 0.6; Serper mock returns https://example.com/x and https://www.canada.ca/en/immigration-refugees-citizenship/a.html]",
+    "expect": "The Serper body starts with 'site:canada.ca/en/immigration-refugees-citizenship'. example.com is neither fetched nor persisted. persistChunk (stubbed) is called only for the canada.ca page."
+   }
+  ]
+ },
+ {
+  "id": "S12",
+  "title": "User types a UCI",
+  "category": "privacy",
+  "covers_fix": [
+   "FIX-07"
+  ],
+  "turns": [
+   {
+    "user": "my UCI is 12-3456-7890 what is my status",
+    "expect": "An instant reply: the bot can't see files, here is how to check status with IRCC's online tools, and please delete the message. No request body, log line or checkpoint contains the number."
+   }
+  ]
+ },
+ {
+  "id": "S13",
+  "title": "Intake profile stays out of search",
+  "category": "privacy",
+  "covers_fix": [
+   "FIX-07",
+   "FIX-15"
+  ],
+  "turns": [
+   {
+    "user": "2",
+    "expect": "Settle prompt."
+   },
+   {
+    "user": "1",
+    "expect": "Age prompt."
+   },
+   {
+    "user": "34 [then complete the remaining PR slots and reply OK to the recap]",
+    "expect": "The recap is shown before synthesis. No retrieval or Serper query contains '34', 'age' or 'PR status'; the local synthesis input does."
+   }
+  ]
+ },
+ {
+  "id": "S14",
+  "title": "Citizenship days given as an estimate or a range",
+  "category": "slots",
+  "covers_fix": [
+   "FIX-08",
+   "FIX-38"
+  ],
+  "turns": [
+   {
+    "user": "2",
+    "expect": "Settle prompt."
+   },
+   {
+    "user": "2",
+    "expect": "Citizenship intake: PR status question. The second '2' is NOT absorbed by content dedupe (C19)."
+   },
+   {
+    "user": "yes",
+    "expect": "'Got it, PR yes.' plus the days question. Its copy asks for the exact number of days (or 'not sure') and no longer says 'A rough number is fine'."
+   },
+   {
+    "user": "about 3 years",
+    "expect": "'For citizenship IRCC needs your exact count of days — an estimate isn't enough. Use the official physical presence calculator: <canada.ca link>. If you know the exact number of days, type it.' Never stored as 3 or 1,095. No eligibility verdict."
+   },
+   {
+    "user": "2 or 3 years",
+    "expect": "The same calculator reply. Never stored as 23."
+   },
+   {
+    "user": "1102",
+    "expect": "days=1102, with 'Got it, 1,102 days'. The final answer still says to confirm with the official calculator."
+   }
+  ]
+ },
+ {
+  "id": "S15",
+  "title": "Natural-language slot answers",
+  "category": "slots",
+  "covers_fix": [
+   "FIX-08"
+  ],
+  "turns": [
+   {
+    "user": "2",
+    "expect": "Settle prompt."
+   },
+   {
+    "user": "1",
+    "expect": "Age prompt."
+   },
+   {
+    "user": "I am 34 years old",
+    "expect": "'Age 34 — got it.' plus the education prompt. Zero retrieve/synthesize calls."
+   },
+   {
+    "user": "Bachelors",
+    "expect": "Education = Bachelor's degree."
+   },
+   {
+    "user": "[at Canadian-experience prompt] Yes, I worked in Toronto for 2 years",
+    "expect": "Yes is recorded. No RAG call."
+   }
+  ]
+ },
+ {
+  "id": "S16",
+  "title": "Menu choices with natural variation",
+  "category": "unexpected-input",
+  "covers_fix": [
+   "FIX-09",
+   "FIX-12",
+   "FIX-38"
+  ],
+  "turns": [
+   {
+    "user": "[after greeting] 1️⃣",
+    "expect": "The visit/study/work prompt within ~1 s: dispatched at once with no 2.5 s buffer delay (C17). No filler, no RAG."
+   },
+   {
+    "user": "menu",
+    "expect": "The menu, dispatched at once."
+   },
+   {
+    "user": "one.",
+    "expect": "The same as '1'."
+   },
+   {
+    "user": "menu",
+    "expect": "The menu again: not absorbed by content dedupe (C19)."
+   },
+   {
+    "user": "7",
+    "expect": "'Please reply 1, 2 or 3 — or just type your question'. No IRCC lookup."
+   }
+  ]
+ },
+ {
+  "id": "S17",
+  "title": "Closings and noise after an answer (no prompt pending)",
+  "category": "unexpected-input",
+  "covers_fix": [
+   "FIX-09",
+   "FIX-06"
+  ],
+  "turns": [
+   {
+    "user": "What is a PGWP?",
+    "expect": "A grounded answer. No yes/no or recap prompt is pending afterwards."
+   },
+   {
+    "user": "thanks 🙏",
+    "expect": "A one-line closing in < 2 s. retrieve, webFallback and persist are not called."
+   },
+   {
+    "user": "👍",
+    "expect": "No reply (an ack, because no yes/no prompt is pending)."
+   },
+   {
+    "user": "asdfgh",
+    "expect": "A rapid reprompt. No RAG."
+   },
+   {
+    "user": "PGWP?",
+    "expect": "Treated as a question (an acronym) and answered."
+   }
+  ]
+ },
+ {
+  "id": "S18",
+  "title": "User says the answer is wrong (bare complaint)",
+  "category": "incorrect-response",
+  "covers_fix": [
+   "FIX-22"
+  ],
+  "turns": [
+   {
+    "user": "What is the fee for a work permit?",
+    "expect": "A grounded answer. lastSources is stored."
+   },
+   {
+    "user": "that is wrong",
+    "expect": "An apology, plus the options: ask another way, show the official page I used, or talk to a licensed RCIC or lawyer. No RAG call."
+   },
+   {
+    "user": "show me the page",
+    "expect": "The previous answer's source URL(s), from lastSources."
+   }
+  ]
+ },
+ {
+  "id": "S19",
+  "title": "Burst of fragments merged into one turn",
+  "category": "sequence-break",
+  "covers_fix": [
+   "FIX-12",
+   "FIX-11"
+  ],
+  "turns": [
+   {
+    "user": "[t=0] I want to apply for",
+    "expect": "Nothing sent yet (buffering: not a full parse of any pending prompt)."
+   },
+   {
+    "user": "[t=1.5s] PGWP",
+    "expect": "Still buffering."
+   },
+   {
+    "user": "[t=3s] but my permit expires next month",
+    "expect": "After 2.5 s of quiet: ONE graph invocation with all three lines, at most ONE filler, and ONE answer quoting the last message. No reaction."
+   }
+  ]
+ },
+ {
+  "id": "S20",
+  "title": "Choice and slot answered twice (immediate dispatch, then re-bind)",
+  "category": "correction-in-order",
+  "covers_fix": [
+   "FIX-12",
+   "FIX-15",
+   "FIX-10"
+  ],
+  "turns": [
+   {
+    "user": "[at menu, t=0] 1",
+    "expect": "Dispatched at once (C17): the visit/study/work prompt is sent."
+   },
+   {
+    "user": "[t=1s] sorry 2",
+    "expect": "Repair marker + value re-binds the last answered prompt (C15): 'Got it — 2 instead.' plus the settle prompt. No 'didn't catch that' and no RAG."
+   },
+   {
+    "user": "1",
+    "expect": "Age prompt."
+   },
+   {
+    "user": "[t=0] 29",
+    "expect": "Dispatched at once: age=29, then the education prompt."
+   },
+   {
+    "user": "[t=2s] sorry 30",
+    "expect": "'Updated: age 30.' plus the education prompt again. Zero retrieve/synthesize calls."
+   }
+  ]
+ },
+ {
+  "id": "S21",
+  "title": "Correction typed while the answer is generating",
+  "category": "correction-out-of-order",
+  "covers_fix": [
+   "FIX-12",
+   "FIX-10",
+   "FIX-16"
+  ],
+  "turns": [
+   {
+    "user": "how long does a work permit take [synthesize stub 20 s]",
+    "expect": "Composing, and the filler at ~4 s."
+   },
+   {
+    "user": "[t=6s] sorry I mean study permit",
+    "expect": "An immediate ack: 'Got it — study permit instead, one moment.' The work-permit answer is generated but NEVER sent, and never written to lastTurns. No second filler, and the superseded run's 60 s/120 s messages are cancelled. The outbound log contains no work-permit text. With FIX-16 landed: ONE study-permit processing-time answer, quoting the correction (the merged turn carries the withdrawn text, so 'take' resolves to processing time). Before FIX-16, only the never-sent assertions apply."
+   }
+  ]
+ },
+ {
+  "id": "S22",
+  "title": "Control message during a long answer",
+  "category": "start-over",
+  "covers_fix": [
+   "FIX-12"
+  ],
+  "turns": [
+   {
+    "user": "What is Express Entry? [synthesize 30 s]",
+    "expect": "The wait signal starts."
+   },
+   {
+    "user": "[t=8s] never mind",
+    "expect": "'Okay, stopping.' plus a short menu at ~t=8 s, sent by the transport. No Express Entry answer is ever sent. After the run resolves, graph state shows the reset, pendingMessage is null, and no second menu message is sent. No concurrent graph.invoke."
+   }
+  ]
+ },
+ {
+  "id": "S23",
+  "title": "Messages sent while the bot was offline",
+  "category": "platform",
+  "covers_fix": [
+   "FIX-13"
+  ],
+  "turns": [
+   {
+    "user": "[socket down; t=10s] how long is a study permit valid? [delivered on reconnect as 'append', offline=true, within the window]",
+    "expect": "Exactly ONE answer, prefaced 'Sorry, I was offline for a bit', quoting the message."
+   },
+   {
+    "user": "[same key.id re-emitted as 'notify']",
+    "expect": "No second reply (LRU dedupe)."
+   },
+   {
+    "user": "[3 appends from one chat, 2 h old]",
+    "expect": "ONE coalesced note quoting the last message: 'Sorry, I was offline — I saw your messages from earlier. Send the one you still need again.' Never three answers, and never silence."
+   },
+   {
+    "user": "[append: fromMe=true, or a newsletter, or an offline call, or a non-allowlisted sender]",
+    "expect": "No reply."
+   }
+  ]
+ },
+ {
+  "id": "S24",
+  "title": "User edits a queued message and an answered one",
+  "category": "correction-out-of-order",
+  "covers_fix": [
+   "FIX-14",
+   "FIX-10"
+  ],
+  "turns": [
+   {
+    "user": "[t=0] How long can I stay as a visiter [answer in flight]",
+    "expect": "Wait signal."
+   },
+   {
+    "user": "[t=1s] What is the study permit fee? (queued)",
+    "expect": "Buffered."
+   },
+   {
+    "user": "[edit of turn 2 → 'What is the study permit fee for my son?']",
+    "expect": "The queued text is replaced, and the edited version is answered."
+   },
+   {
+    "user": "[edit of turn 1 after it was answered → 'How long can I stay as a visitor'] (typo only)",
+    "expect": "No new message and no new graph run."
+   },
+   {
+    "user": "[edit of turn 1 → 'How long can I stay as a visitor on a super visa?'] (meaning change)",
+    "expect": "'You edited your question; here's the updated answer:', quoting the edited message. The upsert of the protocolMessage triggers nothing."
+   }
+  ]
+ },
+ {
+  "id": "S25",
+  "title": "User deletes a queued message",
+  "category": "correction-out-of-order",
+  "covers_fix": [
+   "FIX-14"
+  ],
+  "turns": [
+   {
+    "user": "[t=0] Can my wife work in Canada? [answer in flight]",
+    "expect": "Wait signal."
+   },
+   {
+    "user": "[t=2s] And my kids? (queued)",
+    "expect": "Buffered."
+   },
+   {
+    "user": "[revoke of turn 2]",
+    "expect": "Only ONE answer (to turn 1). The revoked message is never answered."
+   }
+  ]
+ },
+ {
+  "id": "S26",
+  "title": "Out-of-order slot correction + recap",
+  "category": "correction-out-of-order",
+  "covers_fix": [
+   "FIX-15",
+   "FIX-08"
+  ],
+  "turns": [
+   {
+    "user": "2",
+    "expect": "Settle prompt."
+   },
+   {
+    "user": "1",
+    "expect": "Age prompt."
+   },
+   {
+    "user": "32",
+    "expect": "'Age 32 — got it.' plus the education prompt."
+   },
+   {
+    "user": "wait I am actually 34 not 32",
+    "expect": "'Updated: age 34.' plus the education prompt again. Zero retrieve/synthesize calls."
+   },
+   {
+    "user": "[finish remaining slots]",
+    "expect": "A numbered recap with 'Reply OK, or the item number to change it'. No synthesize before OK."
+   },
+   {
+    "user": "1",
+    "expect": "'What should your age be?'. After '35', only age changes and the recap is shown again."
+   }
+  ]
+ },
+ {
+  "id": "S27",
+  "title": "Reset vocabulary: true and false positives",
+  "category": "start-over",
+  "covers_fix": [
+   "FIX-15"
+  ],
+  "turns": [
+   {
+    "user": "reset my GCKey password",
+    "expect": "A RAG answer about GCKey password recovery, NOT the menu."
+   },
+   {
+    "user": "cancel my biometrics appointment how?",
+    "expect": "A RAG answer, NOT a reset."
+   },
+   {
+    "user": "menu please",
+    "expect": "The menu."
+   },
+   {
+    "user": "Menu?",
+    "expect": "The menu."
+   },
+   {
+    "user": "2",
+    "expect": "Settle prompt."
+   },
+   {
+    "user": "1",
+    "expect": "Age prompt."
+   },
+   {
+    "user": "cancel",
+    "expect": "'Okay, stopping the PR check.' plus a short menu. slots deep-equal {}."
+   },
+   {
+    "user": "can we start over please, I want to ask about my mom visiting",
+    "expect": "A reset, then the remainder answered (a visitor visa for a parent)."
+   }
+  ]
+ },
+ {
+  "id": "S28",
+  "title": "Escalating no-match",
+  "category": "unexpected-input",
+  "covers_fix": [
+   "FIX-15",
+   "FIX-38"
+  ],
+  "turns": [
+   {
+    "user": "[at age prompt] blue",
+    "expect": "'How old are you?'"
+   },
+   {
+    "user": "blue",
+    "expect": "'Just the number, like 34.' (not absorbed by content dedupe)"
+   },
+   {
+    "user": "blue",
+    "expect": "'Want to skip this question, or go back to the menu?'"
+   }
+  ]
+ },
+ {
+  "id": "S29",
+  "title": "Side question mid-intake; continue or stop",
+  "category": "context",
+  "covers_fix": [
+   "FIX-15"
+  ],
+  "turns": [
+   {
+    "user": "[at education prompt] How do I sponsor my mother?",
+    "expect": "An answer, then 'Continue the PR check (1 of 6 done) or stop?'."
+   },
+   {
+    "user": "continue",
+    "expect": "The education prompt, with the age kept."
+   }
+  ]
+ },
+ {
+  "id": "S30",
+  "title": "Context-dependent correction after an answer",
+  "category": "context",
+  "covers_fix": [
+   "FIX-16"
+  ],
+  "turns": [
+   {
+    "user": "What is the fee for a work permit?",
+    "expect": "A work-permit fee answer."
+   },
+   {
+    "user": "no I meant study permit",
+    "expect": "The rewritten retrieval query includes 'study permit fee', and the reply opens '📌 Study permit fees:'."
+   },
+   {
+    "user": "and for my wife?",
+    "expect": "A spouse-related answer, or one clarifying question. Never context-free."
+   }
+  ]
+ },
+ {
+  "id": "S31",
+  "title": "Quote-reply beats recency",
+  "category": "context",
+  "covers_fix": [
+   "FIX-16",
+   "FIX-10"
+  ],
+  "turns": [
+   {
+    "user": "What is a PGWP?",
+    "expect": "Answer A."
+   },
+   {
+    "user": "And what is a SOWP?",
+    "expect": "Answer B."
+   },
+   {
+    "user": "[quote-reply to answer A] how long does this take?",
+    "expect": "PGWP processing time."
+   }
+  ]
+ },
+ {
+  "id": "S32",
+  "title": "Start over clears context",
+  "category": "start-over",
+  "covers_fix": [
+   "FIX-15",
+   "FIX-16"
+  ],
+  "turns": [
+   {
+    "user": "What is the fee for a work permit?",
+    "expect": "An answer."
+   },
+   {
+    "user": "start over",
+    "expect": "The menu. lastTurns, lastSources and slots are cleared."
+   },
+   {
+    "user": "what about for my wife?",
+    "expect": "A clarification, with no work-permit context."
+   }
+  ]
+ },
+ {
+  "id": "S33",
+  "title": "Return after hours and after days with an open intake",
+  "category": "context",
+  "covers_fix": [
+   "FIX-17"
+  ],
+  "turns": [
+   {
+    "user": "2",
+    "expect": "Settle prompt."
+   },
+   {
+    "user": "1",
+    "expect": "Age prompt."
+   },
+   {
+    "user": "[clock +5 h] 34",
+    "expect": "'Welcome back — age 34, got it.' plus the education prompt. No resume card, no RAG."
+   },
+   {
+    "user": "[clock +2 days] hi",
+    "expect": "'Welcome back! Last time: PR check, 1 of 6 answered. Continue, or start fresh — or just ask.' pendingMessage is null. No 'didn't catch that'."
+   },
+   {
+    "user": "start fresh",
+    "expect": "slots deep-equal {}. The menu."
+   },
+   {
+    "user": "[new run: open intake, clock +8 days] hello",
+    "expect": "The intake is cleared silently, and a normal greeting nudge follows. No stale reply is replayed."
+   }
+  ]
+ },
+ {
+  "id": "S34",
+  "title": "Wait signal and outbound budget",
+  "category": "waiting-time",
+  "covers_fix": [
+   "FIX-11",
+   "FIX-10",
+   "FIX-01"
+  ],
+  "turns": [
+   {
+    "user": "Can my spouse work while I study? [synthesize 27 s; bot readreceipts='all' per open question 15]",
+    "expect": "readMessages([key]) at turn start, composing refreshes as today, ONE filler text at ~4 s, and the answer at ~27 s. No quote (adjacent) and no reaction. Outbound count = today's + 1 read receipt."
+   },
+   {
+    "user": "[t=10s, during wait] ok",
+    "expect": "No reply and no extra RAG turn (no yes/no prompt is pending, so it is an ack). Not merged into the question text."
+   },
+   {
+    "user": "[graph resolves at 3.9 s, send takes 200 ms]",
+    "expect": "No filler after the answer. The answer is the last outbound message."
+   }
+  ]
+ },
+ {
+  "id": "S35",
+  "title": "Long answer budget, tolerant 'more', tapered reminder",
+  "category": "formatting",
+  "covers_fix": [
+   "FIX-18"
+  ],
+  "turns": [
+   {
+    "user": "Can I work while studying? [stub returns 2,400 chars]",
+    "expect": "A message ≤ cap, verdict first, ≤ 2 URLs, the one-line menu hint (first answer), ending 'Want more? Reply *more*'."
+   },
+   {
+    "user": "How many hours a week?",
+    "expect": "An answer with NO menu hint. The remainder is kept."
+   },
+   {
+    "user": "pls continue",
+    "expect": "The stored remainder of the first answer, with no new synthesize call."
+   },
+   {
+    "user": "more about PGWP",
+    "expect": "Treated as a new question about PGWP, not as overflow."
+   }
+  ]
+ },
+ {
+  "id": "S36",
+  "title": "High-stakes disclaimer rendered by code",
+  "category": "grounding",
+  "covers_fix": [
+   "FIX-18"
+  ],
+  "turns": [
+   {
+    "user": "How do I get a study permit?",
+    "expect": "The full disclaimer, once."
+   },
+   {
+    "user": "What documents?",
+    "expect": "The short footer only."
+   },
+   {
+    "user": "I overstayed my visa, what now? [stub omits any disclaimer]",
+    "expect": "The strong RCIC/lawyer block plus the consultant-register link, appended by code."
+   }
+  ]
+ },
+ {
+  "id": "S37",
+  "title": "Unanswerable and vague questions",
+  "category": "incorrect-response",
+  "covers_fix": [
+   "FIX-19"
+  ],
+  "turns": [
+   {
+    "user": "How much does a Canadian passport renewal cost? [only a study-permit chunk; stub flags ANSWERABLE: no; flag enabled after open question 9]",
+    "expect": "A code-rendered abstain, plus the closest official link and one rephrase tip. No invented fee, and no 'I can fetch a page' promise."
+   },
+   {
+    "user": "permit?",
+    "expect": "Within ~2 s: 'Which permit do you mean — study, work or visitor?'. No synthesize call."
+   },
+   {
+    "user": "study",
+    "expect": "A study-permit overview answer."
+   }
+  ]
+ },
+ {
+  "id": "S38",
+  "title": "Current figures from IRCC's data files",
+  "category": "grounding",
+  "covers_fix": [
+   "FIX-20"
+  ],
+  "turns": [
+   {
+    "user": "what was the last express entry draw? [JSON stub: drawDate 2026-10-28, CRS 477]",
+    "expect": "The date, CRS and size from the JSON, worded 'As of …', with the rounds page link."
+   },
+   {
+    "user": "and processing time for visitor visa? [JSON fetch fails]",
+    "expect": "'I can't get the live figure right now' plus the official tool link. No number from the corpus."
+   }
+  ]
+ },
+ {
+  "id": "S39",
+  "title": "Reconnect while an answer is in flight",
+  "category": "platform",
+  "covers_fix": [
+   "FIX-21"
+  ],
+  "turns": [
+   {
+    "user": "How do I extend my visitor record? [synthesize 20 s; t=5s socket close; t=9s new socket open]",
+    "expect": "The answer is delivered on the NEW socket at ~t=20 s, with at most one message per chat in the flush."
+   },
+   {
+    "user": "[t=12s] 2",
+    "expect": "Processed AFTER the first answer. graph.invoke is never re-entered on the same thread."
+   }
+  ]
+ },
+ {
+  "id": "S40",
+  "title": "Non-English replies",
+  "category": "unexpected-input",
+  "covers_fix": [
+   "FIX-08",
+   "FIX-09"
+  ],
+  "turns": [
+   {
+    "user": "2",
+    "expect": "Settle prompt."
+   },
+   {
+    "user": "2",
+    "expect": "Citizenship intake: PR status question."
+   },
+   {
+    "user": "haan ji",
+    "expect": "Recorded as yes, then the days question. No no-match. (Fails on today's main: not in YES_WORDS.)"
+   },
+   {
+    "user": "[start a new free-text turn, no prompt pending; Devanagari] मेरे बेटे का वीज़ा कब आएगा",
+    "expect": "Regression guard: handled as today. It goes to RAG and the reply is in English with SYSTEM_PROMPT's one-line acknowledgement. No canned 'English only' line, and no no-match. Answer quality is not asserted (open question 22)."
+   }
+  ]
+ },
+ {
+  "id": "S41",
+  "title": "Complaint and correction in one message",
+  "category": "incorrect-response",
+  "covers_fix": [
+   "FIX-22",
+   "FIX-16",
+   "FIX-09"
+  ],
+  "turns": [
+   {
+    "user": "What is the fee for a work permit?",
+    "expect": "A grounded answer."
+   },
+   {
+    "user": "no thats wrong, I asked for my mother not me",
+    "expect": "'Sorry about that —' plus an answer rewritten for the mother (e.g. visitor or super visa fees), with the 📌 heading. NOT the options menu."
+   },
+   {
+    "user": "wrong",
+    "expect": "A bare complaint with no prompt pending: the options repair. No RAG."
+   }
+  ]
+ },
+ {
+  "id": "S42",
+  "title": "Prods during a long wait",
+  "category": "waiting-time",
+  "covers_fix": [
+   "FIX-09",
+   "FIX-11"
+  ],
+  "turns": [
+   {
+    "user": "How do I renew my PR card? [synthesize 40 s]",
+    "expect": "Composing, and the filler at ~4 s."
+   },
+   {
+    "user": "[t=15s] hello??",
+    "expect": "ONE status reply ('Still checking — about 20 more seconds'), dispatched at once (C17). Not merged into the question, no new turn, and no greeting or menu."
+   },
+   {
+    "user": "[t=20s] are u there",
+    "expect": "No second status reply in the same turn."
+   },
+   {
+    "user": "[t=40s]",
+    "expect": "The PR-card answer, quoting the original question (adjacency is broken)."
+   }
+  ]
+ },
+ {
+  "id": "S43",
+  "title": "Compound question in one message",
+  "category": "unexpected-input",
+  "covers_fix": [
+   "FIX-34"
+  ],
+  "turns": [
+   {
+    "user": "how much study permit fee and can my wife work and kids school free?",
+    "expect": "ONE message with three short sections (fee, spouse work, children's schooling), each grounded. Retrieval is called once per part, and no part is silently dropped."
+   },
+   {
+    "user": "what is PGWP and SOWP and IEC and LMIA?",
+    "expect": "Three parts answered. The message ends 'You also asked about LMIA — send it next and I'll answer it.'"
+   }
+  ]
+ },
+ {
+  "id": "S44",
+  "title": "User asks whether the bot is IRCC or a person",
+  "category": "identity",
+  "covers_fix": [
+   "FIX-09",
+   "FIX-02"
+  ],
+  "turns": [
+   {
+    "user": "are you IRCC?",
+    "expect": "A fixed reply: a family helper bot, not IRCC and not a person. It reads public canada.ca pages and can't see files. Includes the official IRCC contact page link. No RAG."
+   },
+   {
+    "user": "can I talk to someone? please call me",
+    "expect": "A fixed reply: it can't call. Includes the IRCC contact route and the licensed-consultant register link. No RAG."
+   },
+   {
+    "user": "can you check my file",
+    "expect": "A fixed reply: it can't see applications, and here is how to check status in the IRCC account. No RAG."
+   }
+  ]
+ },
+ {
+  "id": "S45",
+  "title": "Same question resent on flaky data",
+  "category": "sequence-break",
+  "covers_fix": [
+   "FIX-38"
+  ],
+  "turns": [
+   {
+    "user": "[t=0] What is the fee for a study permit?",
+    "expect": "A normal free-text RAG turn."
+   },
+   {
+    "user": "[t=25s, new key.id] What is the fee for a study permit?",
+    "expect": "Absorbed: same normalized text and same pending-prompt id (none). No second graph run and no second filler."
+   },
+   {
+    "user": "[t=3 min, new key.id] what is the fee for a study permit",
+    "expect": "One line quoting the earlier answer ('I answered this just above'). No graph run."
+   }
+  ]
+ },
+ {
+  "id": "S46",
+  "title": "Late or quoted digit after a newer prompt",
+  "category": "sequence-break",
+  "covers_fix": [
+   "FIX-10",
+   "FIX-15"
+  ],
+  "turns": [
+   {
+    "user": "[menu shown] (digit typed at t=0, delivered at t=12s after the bot sent the settle prompt at t=5s) 1",
+    "expect": "Ambiguous: 'Did you mean 1 for the main menu (visit/study/work)?', with yes/no. Nothing is bound silently."
+   },
+   {
+    "user": "[quote-reply to the settle prompt] 2",
+    "expect": "Bound to the settle prompt (citizenship), whatever prompt is pending."
+   }
+  ]
+ },
+ {
+  "id": "S47",
+  "title": "Narrative with no explicit question",
+  "category": "unexpected-input",
+  "covers_fix": [
+   "FIX-19",
+   "FIX-09",
+   "FIX-02"
+  ],
+  "turns": [
+   {
+    "user": "[new chat] Hello sir, my son applied study permit july, biometrics done, still nothing, agent not replying",
+    "expect": "The intro line plus ONE clarifying question: 'Do you want to know normal processing times, or what to do if it's taking too long?'. No greeting-only reply and no generic RAG dump."
+   },
+   {
+    "user": "what to do",
+    "expect": "A grounded answer on delays: check the account, use the web form, see the processing-times tool."
+   }
+  ]
+ },
+ {
+  "id": "S48",
+  "title": "Voice note and sticker",
+  "category": "unexpected-input",
+  "covers_fix": [
+   "FIX-23"
+  ],
+  "turns": [
+   {
+    "user": "[allowlisted; at age prompt] [voice note]",
+    "expect": "'I can't listen to voice notes yet — could you type it? How old are you? (just the number)'."
+   },
+   {
+    "user": "[voice note]",
+    "expect": "A shorter line: 'Please type it — just the number.'"
+   },
+   {
+    "user": "[sticker]",
+    "expect": "No reply."
+   }
+  ]
+ },
+ {
+  "id": "S49",
+  "title": "Allowlisted contact whose @lid does not resolve",
+  "category": "platform",
+  "covers_fix": [
+   "FIX-35",
+   "FIX-40"
+  ],
+  "turns": [
+   {
+    "user": "[message from an @lid; lidMapping returns nothing on the first try, the allowlisted PN on retry]",
+    "expect": "Processed normally after one retry."
+   },
+   {
+    "user": "[message from an @lid; lidMapping never resolves]",
+    "expect": "No user-facing reply. One operator alert with a hashed jid and no message text. The log has no text."
+   }
+  ]
+ },
+ {
+  "id": "S50",
+  "title": "'forget me' needs a whole-message match and a confirm",
+  "category": "start-over",
+  "covers_fix": [
+   "FIX-28"
+  ],
+  "turns": [
+   {
+    "user": "they forgot me at the airport, what can I do?",
+    "expect": "A RAG answer. Nothing is deleted."
+   },
+   {
+    "user": "forget me",
+    "expect": "'This deletes our whole chat history with me. Reply *yes, delete* to confirm.' deleteThread is not called."
+   },
+   {
+    "user": "yes, delete",
+    "expect": "deleteThread is called once, followed by a one-line confirmation."
+   }
+  ]
+ },
+ {
+  "id": "S51",
+  "title": "Forwarded scam text",
+  "category": "grounding",
+  "covers_fix": [
+   "FIX-39",
+   "FIX-05"
+  ],
+  "turns": [
+   {
+    "user": "[forwarded, isForwarded=true] IRCC: your PR is cancelled, pay $500 now to restore it. is this true?",
+    "expect": "A fraud-check reply whose wording comes from the IRCC protect-fraud page (fetched and checked before the copy is written). It includes that page's link and 'don't pay or share details until you verify'. The scam claim is not restated as fact, and no RAG runs on the scam text."
+   },
+   {
+    "user": "[forwarded, isForwarded=true] Express Entry draw results are out today",
+    "expect": "Answered with a 'This was forwarded —' preface and the official rounds link."
+   }
+  ]
+ },
+ {
+  "id": "S52",
+  "title": "Non-allowlisted sender and an isAllowed throw get no reply",
+  "category": "platform",
+  "covers_fix": [
+   "FIX-40",
+   "FIX-35"
+  ],
+  "turns": [
+   {
+    "user": "[non-allowlisted jid] [image, no caption]",
+    "expect": "Zero outbound events (no media nudge, no presence, no receipt). Fails on today's main: the media nudge replies (read)."
+   },
+   {
+    "user": "[non-allowlisted jid] [voice note]",
+    "expect": "Zero outbound events."
+   },
+   {
+    "user": "[non-allowlisted jid] What is a study permit?",
+    "expect": "Zero outbound events. No log line contains the message text."
+   },
+   {
+    "user": "[any jid; isAllowed throws]",
+    "expect": "No reply to the sender (today: 'Sorry, something went wrong' is sent, read). One text-free error log and one FIX-35 operator alert."
+   }
+  ]
+ },
+ {
+  "id": "S53",
+  "title": "Pending prompt binds before dialogue-act classes",
+  "category": "unexpected-input",
+  "covers_fix": [
+   "FIX-09",
+   "FIX-08"
+  ],
+  "turns": [
+   {
+    "user": "2",
+    "expect": "Settle prompt."
+   },
+   {
+    "user": "2",
+    "expect": "Citizenship intake: PR status question (a yes/no prompt)."
+   },
+   {
+    "user": "ok",
+    "expect": "Recorded as PR = yes, then the days question. Not treated as an ack. Fails on today's main: 'ok' is not in YES_WORDS (read)."
+   },
+   {
+    "user": "[new run, same path to the PR status question] 👍",
+    "expect": "Recorded as yes. No silence."
+   },
+   {
+    "user": "[new run, finish the PR intake to the recap] 👍",
+    "expect": "Taken as recap OK, so synthesis runs. Not swallowed as an ack."
+   },
+   {
+    "user": "[new run, at the PR status question] no",
+    "expect": "Recorded as PR = no. Not routed to the complaint repair."
+   }
+  ]
+ },
+ {
+  "id": "S54",
+  "title": "Content dedupe never absorbs choices, slots, control words or greetings (regression guard)",
+  "category": "sequence-break",
+  "covers_fix": [
+   "FIX-38"
+  ],
+  "turns": [
+   {
+    "user": "[menu] 2",
+    "expect": "Settle prompt."
+   },
+   {
+    "user": "2",
+    "expect": "Citizenship intake: a new pending prompt, so it is processed (not deduped)."
+   },
+   {
+    "user": "menu",
+    "expect": "The menu."
+   },
+   {
+    "user": "menu",
+    "expect": "The menu again (not deduped)."
+   },
+   {
+    "user": "hi",
+    "expect": "A nudge."
+   },
+   {
+    "user": "hi",
+    "expect": "A nudge (not deduped). This scenario passes on today's main and must still pass after FIX-38."
+   }
+  ]
+ },
+ {
+  "id": "S55",
+  "title": "canada.ca URL that redirects off the allowlist",
+  "category": "grounding",
+  "covers_fix": [
+   "FIX-06"
+  ],
+  "turns": [
+   {
+    "user": "[retrieval grades < 0.6; Serper mock returns https://www.canada.ca/en/immigration-refugees-citizenship/x.html; fetch mock follows a redirect so res.url = https://example.com/y]",
+    "expect": "The page is neither parsed into the answer nor passed to persistChunk (stubbed), because the final res.url fails the host+path check. The answer falls back to the honest no-result path. Fails on today's main: fetchPageText never checks res.url (read)."
+   }
+  ]
+ }
+]
