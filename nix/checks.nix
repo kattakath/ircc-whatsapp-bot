@@ -1,11 +1,14 @@
 # `nix flake check`'s gates — a flake-parts module, imported by flake.nix.
 #
-# Three named checks, each able to go red for a DIFFERENT reason:
+# Named checks, each able to go red for a DIFFERENT reason:
 #
 #   formatting          a tracked file is not formatted / lints dirty per the
 #                       `treefmt` block in flake.nix (nixfmt + deadnix + statix)
-#   toolchain-complete  a binary the dev shell promises no longer resolves
 #   project-gate        the repo's own `npm run lint` or `npm test` fails
+#
+# repo-kit adds `toolchain-complete` (a binary the dev shell promises no longer
+# resolves; the list is nix/toolchain.nix) and one `files:<path>` drift check per
+# generated file.
 #
 # They live here rather than in flake.nix because flake.nix in this repo is the
 # inputs + composition file; `perSystem` concerns get their own module under nix/,
@@ -20,8 +23,6 @@
       ...
     }:
     let
-      toolchain = import ./toolchain.nix { inherit pkgs; };
-
       # ── Vendored node_modules, so project-gate runs with NO network. ──────────
       # `nix flake check` builds in a sandbox with no network, so `npm install` is
       # not available to the gate; the dependencies have to be in the store before
@@ -97,33 +98,6 @@
         # GOES RED WHEN: a tracked file is not formatted as the `treefmt` block in
         # flake.nix says it should be (nixfmt), or trips deadnix/statix.
         formatting = config.treefmt.build.check config.treefmt.projectRoot;
-
-        # Hand-written because nothing off the shelf does it: `mkShell` validates
-        # nothing at all, and `devshell`'s `commands` asserts option SHAPE, not that
-        # a binary resolves. So this uses the conventional property-assertion idiom
-        # — `runCommandLocal` + `nativeBuildInputs` — over the list in toolchain.nix.
-        # GOES RED WHEN: a name in `requiredBins` resolves to no binary provided by
-        # `packages`, i.e. the dev shell quietly stopped shipping something this
-        # project's code or docs invoke by bare name.
-        toolchain-complete =
-          pkgs.runCommandLocal "ircc-whatsapp-bot-toolchain-complete"
-            {
-              nativeBuildInputs = toolchain.packages;
-            }
-            ''
-              missing=""
-              for bin in ${lib.escapeShellArgs toolchain.requiredBins}; do
-                command -v "$bin" >/dev/null 2>&1 || missing="$missing $bin"
-              done
-              if [ -n "$missing" ]; then
-                echo "dev shell is missing:$missing" >&2
-                echo "add the package that SHIPS each one to nix/toolchain.nix — a package" >&2
-                echo "name is not a binary name (nodejs ships node, npm AND npx;" >&2
-                echo "postgresql ships psql)." >&2
-                exit 1
-              fi
-              echo "all ${toString (builtins.length toolchain.requiredBins)} required binaries resolve." > "$out"
-            '';
 
         # The repo's own command, run for real. NOT `absent`: this project does have
         # an offline gate (`npm run lint` — scripts/lint.js parses every .js with

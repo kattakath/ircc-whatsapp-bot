@@ -2,10 +2,12 @@
   description = "WhatsApp bot answering Canadian immigration questions, grounded in official IRCC content via a Cloudflare AI Search RAG store";
 
   inputs = {
-    flake-parts.url = "github:hercules-ci/flake-parts";
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    treefmt-nix.url = "github:numtide/treefmt-nix";
-    treefmt-nix.inputs.nixpkgs.follows = "nixpkgs";
+    # The fleet's shared repo shape (kattakath/nix-config ADR-016): devShell from one
+    # package list, treefmt, and the generated LICENSE/.envrc/.editorconfig/devcontainer
+    # with drift checks. It brings treefmt-nix itself, so this flake no longer imports one.
+    repo-kit.url = "github:ismailkattakath/repo-kit";
+    nixpkgs.follows = "repo-kit/nixpkgs";
+    flake-parts.follows = "repo-kit/flake-parts";
 
     # Optional local Postgres provider (nix-local-rag's pgvector + Ollama) --
     # see nix/module.nix's `localRag.enable`. Retrieval moved to Cloudflare AI
@@ -21,14 +23,16 @@
   outputs =
     inputs@{
       flake-parts,
+      repo-kit,
       nix-local-rag,
       ...
     }:
     flake-parts.lib.mkFlake { inherit inputs; } {
       imports = [
-        inputs.treefmt-nix.flakeModule
-        # `nix flake check`'s three gates: formatting, toolchain-complete,
-        # project-gate. Its own module so this file stays inputs + composition.
+        repo-kit.flakeModules.default
+        # `nix flake check`'s own gates: formatting, project-gate (toolchain-complete
+        # and the generated-file drift checks come from repo-kit). Its own module so
+        # this file stays inputs + composition.
         ./nix/checks.nix
       ];
 
@@ -41,6 +45,15 @@
         "aarch64-linux"
         "aarch64-darwin"
       ];
+
+      repoKit = {
+        name = "ircc-whatsapp-bot";
+        license = {
+          spdx = "MIT";
+          year = "2026";
+          holder = "Ismail Kattakath";
+        };
+      };
 
       flake = {
         # `services.irccWhatsappBot` — see nix/module.nix. Consumers:
@@ -96,18 +109,18 @@
       perSystem =
         { pkgs, ... }:
         let
-          # The dev toolchain, read from ONE place. `checks.toolchain-complete`
-          # (nix/checks.nix) imports this same file and asserts that every binary
-          # in its `requiredBins` resolves from its `packages` — so edit the list
-          # THERE, never inline here. A second list here is exactly what that
-          # check exists to make impossible.
+          # The dev toolchain, read from ONE place (nix/toolchain.nix). repo-kit builds
+          # `devShells.default` from `devPackages` and its `checks.toolchain-complete`
+          # asserts every `requiredBins` name resolves from that same list — so edit the
+          # list THERE, never inline here.
           toolchain = import ./nix/toolchain.nix { inherit pkgs; };
         in
         {
           packages.default = pkgs.callPackage ./nix/package.nix { };
 
-          devShells.default = pkgs.mkShell {
-            inherit (toolchain) packages;
+          repoKit = {
+            devPackages = toolchain.packages;
+            inherit (toolchain) requiredBins;
             shellHook = ''
               echo "ircc-whatsapp-bot dev shell — npm install && npm start (see README for required env vars)"
             '';
@@ -120,8 +133,6 @@
           # (what this was) formats but never LINTS, so statix anti-patterns and
           # deadnix's unused bindings went uncaught here while siblings caught them.
           treefmt = {
-            projectRootFile = "flake.nix";
-            programs.nixfmt.enable = true;
             programs.deadnix.enable = true;
             programs.statix.enable = true;
           };

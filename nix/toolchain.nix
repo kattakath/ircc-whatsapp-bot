@@ -1,8 +1,10 @@
 # The dev toolchain, declared exactly ONCE.
 #
 # Two readers, deliberately:
-#   * flake.nix's `devShells.default` — what a human gets from `nix develop`.
-#   * nix/checks.nix's `toolchain-complete` — what CI asserts still resolves.
+#   * repo-kit's `devShells.default` (repoKit.devPackages) — what a human gets from
+#     `nix develop`.
+#   * repo-kit's `toolchain-complete` (repoKit.requiredBins) — what CI asserts still
+#     resolves.
 #
 # A second copy of this list in either place is what that check exists to make
 # impossible: it would then be asserting against its own copy instead of against

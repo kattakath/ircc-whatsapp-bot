@@ -2,8 +2,11 @@ name: CI
 # ONE FULL RUN PER PR (kattakath/.github's shared landing system). `gate` is the only
 # required check: it asserts each needed job ended exactly as the event expects. `checks`
 # runs once, in the merge queue when vars.QUEUE_ENABLED is 'true', otherwise on the PR; fork
-# PRs always get it on the PR. No `push: main` leg: the queue tests the very commit main gets.
+# PRs always get it on the PR. The owner's changes land by direct push (admin bypass), which
+# no queue sees, so a `push: main` leg runs everything on those commits too.
 on:
+  push:
+    branches: [main]
   pull_request:
   # REQUIRED by the merge queue: a queue entry is built on its own
   # `gh-readonly-queue/main/...` ref, which emits NEITHER `pull_request` NOR
@@ -14,7 +17,9 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.ref }}
+  # Push runs keyed on the sha: with a ref key a newer push would cancel the older one's
+  # pending run and a watcher would read a false failure.
+  group: ci-${{ github.event.pull_request.number || (github.event_name == 'push' && github.sha) || github.ref }}
   # Supersede stale PR runs; never cancel a queue run (the queue would eject the PR).
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
@@ -25,7 +30,7 @@ jobs:
   # THE ONLY REQUIRED CHECK. Every ruleset names it; never rename it.
   gate:
     if: ${{ !cancelled() }}
-    needs: [checks]
+    needs: [checks, flake-check]
     runs-on: ubuntu-24.04
     timeout-minutes: 2
     steps:
@@ -34,7 +39,8 @@ jobs:
         with:
           needs: ${{ toJSON(needs) }}
           expect: >-
-            {"checks": ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository || vars.QUEUE_ENABLED != 'true' }}}
+            {"checks": ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository || vars.QUEUE_ENABLED != 'true' }},
+             "flake-check": true}
 
   checks:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository || vars.QUEUE_ENABLED != 'true'
@@ -63,3 +69,25 @@ jobs:
       # flake's own pin.
       - name: Module eval + package build
         run: nix flake check -L
+
+  # repo-kit's flake-check job (ismailkattakath/repo-kit .github/workflows/ci.yml), same
+  # pinned actions: every flake check on both Linux arches (`checks` above covers darwin) —
+  # formatting, project-gate, the devShell's toolchain and each generated file's drift
+  # check (files:<path>). Runs on every event, so `expect` holds a plain `true` for it.
+  flake-check:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04-arm, ubuntu-24.04]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      - name: nix flake check
+        run: nix flake check --print-build-logs

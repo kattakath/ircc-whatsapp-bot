@@ -6,3 +6,6 @@ auth/
 .env
 result
 .direnv/
+
+# direnv (the generated .envrc); .envrc.local holds per-machine variables
+.envrc.local
