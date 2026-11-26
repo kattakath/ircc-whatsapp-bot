@@ -223,31 +223,14 @@ in
       };
     };
 
-    localRag = {
-      enable = lib.mkEnableOption ''
-        provisioning a local Postgres via nix-local-rag
-        (github:kattakath/nix-local-rag, pgvector + Ollama) for the bot's
-        LangGraph checkpoints, instead of bringing your own via `ragdbUri`.
-        Retrieval no longer uses it (Cloudflare AI Search since 2026-11-19).
-        Same "createLocally" idiom as
-        nixpkgs' own services.<app>.database.createLocally options -- off
-        by default so a host that already provisions pgvectorLocal itself
-        (e.g. because something else on the host also needs it) doesn't get
-        a second, redundant instance
-      '';
-    };
-
     ragdbUri = lib.mkOption {
       type = lib.types.str;
-      default = config.services.pgvectorLocal.databaseUri;
+      example = "postgresql://bot@127.0.0.1:5432/ircc";
       description = ''
         Postgres connection string for the LangGraph checkpointer
-        (PostgresSaver creates its own tables). Retrieval does not use it any
-        more -- that is Cloudflare AI Search. Defaults to nix-local-rag's own
-        `services.pgvectorLocal.databaseUri` (single-sourced, not
-        duplicated here) whether or not `localRag.enable` actually turns
-        that service on -- override this directly if you're pointing at
-        Postgres running elsewhere instead.
+        (PostgresSaver creates its own tables). Retrieval does not use it --
+        that is Cloudflare AI Search. Required: this flake bundles no Postgres,
+        so the host points it at one it already runs.
       '';
     };
 
@@ -299,10 +282,6 @@ in
         message = "services.irccWhatsappBot.environmentFile must be set on non-Darwin systems -- there is no Keychain fallback there.";
       }
     ];
-
-    # `localRag.enable` is acted on by the `default` output's wrapper (flake.nix),
-    # the only output that imports nix-local-rag: defining `services.pgvectorLocal`
-    # here broke `botOnly` with "option does not exist" (measured 2026-11-19).
 
     launchd.agents.ircc-whatsapp-bot = lib.mkIf pkgs.stdenv.hostPlatform.isDarwin {
       enable = true;

@@ -42,8 +42,8 @@ or if an item has no metadata yet (still indexing). It never deletes `ircc-live`
 ## Re-crawl monthly with launchd
 
 ```sh
-cp scripts/com.ismailkattakath.ircc-whatsapp-bot.recrawl.plist ~/Library/LaunchAgents/
-launchctl load ~/Library/LaunchAgents/com.ismailkattakath.ircc-whatsapp-bot.recrawl.plist
+cp scripts/com.kattakath.ircc-whatsapp-bot.recrawl.plist ~/Library/LaunchAgents/
+launchctl load ~/Library/LaunchAgents/com.kattakath.ircc-whatsapp-bot.recrawl.plist
 ```
 
 The plist's `StartCalendarInterval` sets the schedule. It logs to

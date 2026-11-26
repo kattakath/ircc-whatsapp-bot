@@ -18,7 +18,7 @@ The flake's `systems` list in [`flake.nix`](../../flake.nix) says which platform
   #   { services.irccWhatsappBot = {
   #       enable = true;
   #       allowedNumbers = [ "15145551234" ]; # real numbers -- keep these out of a public flake
-  #       localRag.enable = true; # no Postgres of your own yet? see below
+  #       ragdbUri = "postgresql://bot@127.0.0.1:5432/ircc"; # your Postgres, see below
   #     }; }
 }
 ```
@@ -33,19 +33,15 @@ anyone.
 
 The bot needs a reachable Postgres for its LangGraph checkpoints. Retrieval does not touch it:
 that is Cloudflare AI Search. A database is third-party infrastructure, so this flake does not
-bundle one. Bundling would give a host that runs anything *else* on Postgres two redundant,
-possibly conflicting instances. It follows nixpkgs' own
-`services.<app>.database.createLocally` idiom instead (for example
-`services.paperless.database.createLocally`):
+bundle one: bundling would give a host that runs anything *else* on Postgres two redundant,
+possibly conflicting instances.
 
-| Your host | Use |
-| --- | --- |
-| Already runs Postgres | Leave `localRag.enable` at `false` and point `ragdbUri` at it |
-| Already declares `services.pgvectorLocal` | The `botOnly` module output, which skips the nix-local-rag import, so the option is not declared twice |
-| Has no Postgres | `localRag.enable = true`: the `default` output imports [nix-local-rag](https://github.com/kattakath/nix-local-rag) and turns on its `services.pgvectorLocal` and `services.ollamaLocal`. `ragdbUri` already defaults to that service's connection string |
-
-nix-local-rag is an **archived** repository. The `default` output still takes it as a flake
-input.
+- **`ragdbUri` is required.** Point it at a Postgres the host already runs, for example
+  nixpkgs' own `services.postgresql`.
+- **No Postgres yet?** Turn on `services.postgresql` (NixOS and nix-darwin both have it), create
+  a database and role for the bot, and pass its URI.
+- **`botOnly`** is the same module as `default`, under its older name. Existing consumers keep
+  working.
 
 ## Never run two copies against one paired session
 

@@ -45,11 +45,14 @@ lockfile bump is the only thing that can make it refetch.
 - Update `README.md` or `docs/` for user-facing changes; CI (format + `nix flake check`)
   must pass.
 
-## How a PR lands
+## How a change lands
 
 - **`gate` is the only required check.** It passes only when every other CI job ended as
   expected for the event.
-- **Fork PRs run the full `checks` suite on the PR**, so you see real failures before review.
-- **A maintainer merges through the merge queue.** The queue re-runs `checks` on your change
-  combined with the latest `main`, and merges it if green. If it fails there, the PR leaves
-  the queue with the reason on its timeline. Push a fix and a maintainer re-queues it.
+- **The owner lands by direct push to `main`.** CI's `push: main` leg runs the full suite on
+  that commit, behind the same `gate`.
+- **Bot and fork PRs go through the merge queue.** Fork PRs run the full `checks` suite on the
+  PR, so you see real failures before review. A maintainer queues the PR; the queue re-runs
+  `checks` on your change combined with the latest `main` and merges it if green. If it fails
+  there, the PR leaves the queue with the reason on its timeline. Push a fix and a maintainer
+  re-queues it.

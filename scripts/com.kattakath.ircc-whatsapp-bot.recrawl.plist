@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
 	<key>Label</key>
-	<string>com.ismailkattakath.ircc-whatsapp-bot.recrawl</string>
+	<string>com.kattakath.ircc-whatsapp-bot.recrawl</string>
 
 	<key>ProgramArguments</key>
 	<array>
