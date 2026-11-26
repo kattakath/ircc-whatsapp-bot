@@ -36,13 +36,13 @@ lockfile bump is the only thing that can make it refetch.
   mismatch makes a menu branch silently return zero results.
 - Never run a built binary (or `nix build`'s `result/`) from a checkout that
   holds a *live, paired* `auth/` session while that session's real bot
-  process is also running — see the README's caution; it force-repairs both.
+  process is also running — see docs/how-to/run-as-a-nix-service.md; it force-repairs both.
 - Keep the legal-boundary framing intact (`src/llm.js`'s system prompt +
   README's "Legal boundary" section) — this bot gives informal information,
   never presented as licensed immigration advice.
-- New env vars: update `.env.example`, `nix/module.nix`'s option surface,
-  and the README together — don't let them drift.
-- Update `README.md` for user-facing changes; CI (format + `nix flake check`)
+- New env vars: update `.env.example` and `nix/module.nix`'s option surface
+  together — don't let them drift. The docs point at those two files.
+- Update `README.md` or `docs/` for user-facing changes; CI (format + `nix flake check`)
   must pass.
 
 ## How a PR lands

@@ -122,7 +122,7 @@
             devPackages = toolchain.packages;
             inherit (toolchain) requiredBins;
             shellHook = ''
-              echo "ircc-whatsapp-bot dev shell — npm install && npm start (see README for required env vars)"
+              echo "ircc-whatsapp-bot dev shell — npm install && npm start (see .env.example for required env vars)"
             '';
           };
 

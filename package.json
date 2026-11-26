@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "WhatsApp bot that answers Canadian immigration questions grounded in official IRCC pages, via a Cloudflare AI Search RAG store.",
+  "description": "WhatsApp bot answering Canadian immigration questions from official IRCC pages, retrieved via Cloudflare AI Search",
   "license": "MIT",
   "author": "Ismail Kattakath",
   "homepage": "https://github.com/kattakath/ircc-whatsapp-bot#readme",
