@@ -70,24 +70,8 @@ jobs:
       - name: Module eval + package build
         run: nix flake check -L
 
-  # repo-kit's flake-check job (ismailkattakath/repo-kit .github/workflows/ci.yml), same
-  # pinned actions: every flake check on both Linux arches (`checks` above covers darwin) —
-  # formatting, project-gate, the devShell's toolchain and each generated file's drift
+  # The fleet's ONE reusable nix-flake-check workflow (kattakath/.github): every flake
+  # check on both Linux arches (`checks` above covers darwin) — formatting, project-gate, the devShell's toolchain and each generated file's drift
   # check (files:<path>). Runs on every event, so `expect` holds a plain `true` for it.
   flake-check:
-    strategy:
-      fail-fast: false
-      matrix:
-        runner: [ubuntu-24.04-arm, ubuntu-24.04]
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31
-        with:
-          extra_nix_config: |
-            experimental-features = nix-command flakes
-      - name: nix flake check
-        run: nix flake check --print-build-logs
+    uses: kattakath/.github/.github/workflows/nix-flake-check.yml@cad98392a903fd89ec732ea116f38ec871e38ac0 # main
